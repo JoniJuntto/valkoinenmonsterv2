@@ -29,6 +29,7 @@
     "@types/bun": "catalog:",
     "@valkoinenmonsterv2/config": "workspace:*",
     "tsdown": "^0.22.3",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "unrun": "^0.3.1"
   }
 }

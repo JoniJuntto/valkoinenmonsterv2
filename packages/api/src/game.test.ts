@@ -15,6 +15,7 @@ import {
 	GOLDEN_UPGRADES,
 	goldenUpgradeCost,
 	MAX_GAME_VALUE,
+	prestigeRequirement,
 	prestigeReward,
 	producerCost,
 	RUN_UPGRADES,
@@ -59,9 +60,12 @@ describe("Monster game economy", () => {
 	});
 
 	test("calculates prestige and golden upgrade costs", () => {
-		expect(prestigeReward(99_999)).toBe(0);
-		expect(prestigeReward(100_000)).toBe(1);
-		expect(prestigeReward(400_000)).toBe(2);
+		expect(prestigeRequirement(0)).toBe(100_000);
+		expect(prestigeRequirement(1)).toBe(200_000);
+		expect(prestigeRequirement(2)).toBe(300_000);
+		expect(prestigeReward(99_999, 0)).toBe(0);
+		expect(prestigeReward(100_000, 0)).toBe(1);
+		expect(prestigeReward(800_000, 1)).toBe(2);
 		expect(goldenUpgradeCost("auto-tapper", 0)).toBe(4);
 		expect(goldenUpgradeCost("auto-tapper", 4)).toBe(64);
 		expect(

@@ -27,9 +27,9 @@ import {
 	isGoldenUpgradeId,
 	isProducerId,
 	isRunUpgradeId,
-	PRESTIGE_THRESHOLD,
 	PRODUCERS,
 	type ProducerCounts,
+	prestigeRequirement,
 	prestigeReward,
 	producerCost,
 	randomFrenzyThreshold,
@@ -396,8 +396,9 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 };
 
 export const prestige: GameMutation = (state) => {
-	const reward = prestigeReward(state.runCans);
-	if (state.runCans < PRESTIGE_THRESHOLD || reward < 1) {
+	const requirement = prestigeRequirement(state.prestigeLevel);
+	const reward = prestigeReward(state.runCans, state.prestigeLevel);
+	if (state.runCans < requirement || reward < 1) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Prestige is not ready",

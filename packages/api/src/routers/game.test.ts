@@ -81,6 +81,18 @@ describe("server-authoritative mutations", () => {
 		expect(reset.goldenCans).toBe(2);
 		expect(reset.prestigeLevel).toBe(1);
 	});
+
+	test("increases the prestige requirement after each reset", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.prestigeLevel = 1;
+		state.runCans = 100_000;
+		expect(() => prestige(state, new Date(0))).toThrow("Prestige is not ready");
+
+		state.runCans = 200_000;
+		const reset = prestige(state, new Date(0));
+		expect(reset.goldenCans).toBe(1);
+		expect(reset.prestigeLevel).toBe(2);
+	});
 });
 
 describe("server accrual and leaderboard", () => {

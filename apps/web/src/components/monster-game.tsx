@@ -11,9 +11,9 @@ import {
 	type GameSnapshot,
 	GOLDEN_UPGRADES,
 	goldenUpgradeCost,
-	PRESTIGE_THRESHOLD,
 	PRODUCERS,
 	type ProducerId,
+	prestigeRequirement,
 	prestigeReward,
 	producerCost,
 	RUN_UPGRADES,
@@ -159,7 +159,8 @@ const NUTRITION_ROWS: {
 ];
 
 const StatsCard = ({ game, isSaving, onPrestige }: StatsCardProps) => {
-	const reward = prestigeReward(game.runCans);
+	const requirement = prestigeRequirement(game.prestigeLevel);
+	const reward = prestigeReward(game.runCans, game.prestigeLevel);
 	return (
 		<Card className="order-2 gap-0 self-start py-0 ring-foreground xl:col-start-1 xl:row-start-1">
 			<div className="p-(--card-spacing) pb-3">
@@ -202,20 +203,20 @@ const StatsCard = ({ game, isSaving, onPrestige }: StatsCardProps) => {
 					<progress
 						aria-label="Progress toward prestige"
 						className="monster-progress mt-2 w-full"
-						max={PRESTIGE_THRESHOLD}
-						value={Math.min(game.runCans, PRESTIGE_THRESHOLD)}
+						max={requirement}
+						value={Math.min(game.runCans, requirement)}
 					/>
 					<p className="mt-2 text-muted-foreground">
-						* {formatGameNumber(game.runCans)} /{" "}
-						{formatGameNumber(PRESTIGE_THRESHOLD)} run cans. Prestige resets the
-						run; golden cans and permanent upgrades stay.
+						* {formatGameNumber(game.runCans)} / {formatGameNumber(requirement)}{" "}
+						run cans. Prestige resets the run; golden cans and permanent
+						upgrades stay.
 					</p>
 				</div>
 			</div>
 			<CardFooter>
 				<Button
 					className="w-full"
-					disabled={isSaving || game.runCans < PRESTIGE_THRESHOLD}
+					disabled={isSaving || game.runCans < requirement}
 					onClick={onPrestige}
 				>
 					Prestige for {reward} golden cans
@@ -885,7 +886,7 @@ export const MonsterGame = () => {
 		if (!current) {
 			return;
 		}
-		const reward = prestigeReward(current.runCans);
+		const reward = prestigeReward(current.runCans, current.prestigeLevel);
 		// biome-ignore lint/suspicious/noAlert: The agreed game flow uses the browser's native confirmation.
 		const confirmed = window.confirm(
 			`Reset this run for ${reward} golden cans? Permanent upgrades and lifetime cans stay.`

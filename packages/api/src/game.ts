@@ -368,8 +368,16 @@ export const calculateIdleGain = (
 	);
 };
 
-export const prestigeReward = (runCans: number): number =>
-	Math.floor(Math.sqrt(clampGameValue(runCans) / PRESTIGE_THRESHOLD));
+export const prestigeRequirement = (prestigeLevel: number): number =>
+	PRESTIGE_THRESHOLD * (prestigeLevel + 1);
+
+export const prestigeReward = (
+	runCans: number,
+	prestigeLevel: number
+): number =>
+	Math.floor(
+		Math.sqrt(clampGameValue(runCans) / prestigeRequirement(prestigeLevel))
+	);
 
 export const frenzyChance = (progress: GameProgress): number =>
 	0.005 * (1 + progress.goldenUpgrades["frenzy-magnet"] * 0.25);

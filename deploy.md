@@ -70,12 +70,12 @@ Commit that source change so future deployments do not need a VPS-only patch.
 ## 4. Configure production environment variables
 
 ```sh
-install -d -m 700 /etc/valkoinen-monster
-touch /etc/valkoinen-monster/api.env /etc/valkoinen-monster/web.env
-chmod 600 /etc/valkoinen-monster/api.env /etc/valkoinen-monster/web.env
+install -d -m 700 /etc/valkoinenmonsterv2
+touch /etc/valkoinenmonsterv2/api.env /etc/valkoinenmonsterv2/web.env
+chmod 600 /etc/valkoinenmonsterv2/api.env /etc/valkoinenmonsterv2/web.env
 ```
 
-Put this in `/etc/valkoinen-monster/api.env`:
+Why Put this in `/etc/valkoinenmonsterv2/api.env`:
 
 ```dotenv
 NODE_ENV=production
@@ -89,7 +89,7 @@ CORS_ORIGIN="https://valkoinen.monster"
 
 Generate the secret with `openssl rand -hex 32`.
 
-Put this in `/etc/valkoinen-monster/web.env`:
+Put this in `/etc/valkoinenmonsterv2/web.env`:
 
 ```dotenv
 HOST=127.0.0.1
@@ -107,12 +107,12 @@ cd /opt/valkoinenmonsterv2/current
 /root/.bun/bin/bun ci
 
 set -a
-. /etc/valkoinen-monster/web.env
+. /etc/valkoinenmonsterv2/web.env
 set +a
 /root/.bun/bin/bun run --cwd apps/web build
 
 set -a
-. /etc/valkoinen-monster/api.env
+. /etc/valkoinenmonsterv2/api.env
 set +a
 /root/.bun/bin/bun run --cwd apps/server build
 /root/.bun/bin/bun run db:migrate
@@ -120,7 +120,7 @@ set +a
 
 ## 6. Add systemd services
 
-Create `/etc/systemd/system/valkoinen-monster-api.service`:
+Create `/etc/systemd/system/valkoinenmonsterv2-api.service`:
 
 ```ini
 [Unit]
@@ -131,7 +131,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/valkoinenmonsterv2/current/apps/server
-EnvironmentFile=/etc/valkoinen-monster/api.env
+EnvironmentFile=/etc/valkoinenmonsterv2/api.env
 ExecStart=/root/.bun/bin/bun run dist/index.mjs
 Restart=on-failure
 RestartSec=5
@@ -140,18 +140,18 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Create `/etc/systemd/system/valkoinen-monster-web.service`:
+Create `/etc/systemd/system/valkoinenmonsterv2-web.service`:
 
 ```ini
 [Unit]
 Description=Valkoinen Monster web
-After=network-online.target valkoinen-monster-api.service
+After=network-online.target valkoinenmonsterv2-api.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/valkoinenmonsterv2/current/apps/web
-EnvironmentFile=/etc/valkoinen-monster/web.env
+EnvironmentFile=/etc/valkoinenmonsterv2/web.env
 ExecStart=/root/.bun/bin/bun run dist/server/server.js
 Restart=on-failure
 RestartSec=5
@@ -164,8 +164,8 @@ Enable and start both services:
 
 ```sh
 systemctl daemon-reload
-systemctl enable --now valkoinen-monster-api valkoinen-monster-web
-systemctl status valkoinen-monster-api valkoinen-monster-web
+systemctl enable --now valkoinenmonsterv2-api valkoinenmonsterv2-web
+systemctl status valkoinenmonsterv2-api valkoinenmonsterv2-web
 ```
 
 ## 7. Append to the shared VPS Caddyfile
@@ -216,7 +216,7 @@ curl -I http://127.0.0.1:39281/
 curl -I https://valkoinen.monster
 curl -I https://valkonen.monster
 
-journalctl -u valkoinen-monster-api -u valkoinen-monster-web -n 100 --no-pager
+journalctl -u valkoinenmonsterv2-api -u valkoinenmonsterv2-web -n 100 --no-pager
 journalctl -u caddy -n 100 --no-pager
 ```
 
@@ -234,5 +234,5 @@ git pull --ff-only
 Repeat the build and migration commands from step 5, then restart the services:
 
 ```sh
-systemctl restart valkoinen-monster-api valkoinen-monster-web
+systemctl restart valkoinenmonsterv2-api valkoinenmonsterv2-web
 ```
