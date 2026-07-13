@@ -1,0 +1,24 @@
+{
+  "name": "@valkoinenmonsterv2/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@valkoinenmonsterv2/db": "workspace:*",
+    "@valkoinenmonsterv2/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@valkoinenmonsterv2/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

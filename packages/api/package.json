@@ -1,0 +1,27 @@
+{
+  "name": "@valkoinenmonsterv2/api",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@trpc/client": "catalog:",
+    "@trpc/server": "catalog:",
+    "@valkoinenmonsterv2/auth": "workspace:*",
+    "@valkoinenmonsterv2/db": "workspace:*",
+    "@valkoinenmonsterv2/env": "workspace:*",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@valkoinenmonsterv2/config": "workspace:*",
+    "elysia": "catalog:",
+    "typescript": "catalog:"
+  }
+}
