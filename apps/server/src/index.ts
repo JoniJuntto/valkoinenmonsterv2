@@ -52,6 +52,6 @@ new Elysia()
 		return res;
 	})
 	.get("/", () => "OK")
-	.listen(3000, () => {
+	.listen(6283, () => {
 		console.log("Server is running on http://localhost:3000");
 	});
