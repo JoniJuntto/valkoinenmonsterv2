@@ -1,30 +1,44 @@
 import { Link } from "@tanstack/react-router";
+import { Button } from "@valkoinenmonsterv2/ui/components/button";
+import { MoonIcon, SunIcon } from "lucide-react";
+import { useTheme } from "next-themes";
+import { useCallback } from "react";
 
 import UserMenu from "./user-menu";
 
-export default function Header() {
-  const links = [
-    { to: "/", label: "Home" },
-    { to: "/dashboard", label: "Dashboard" },
-  ] as const;
+function ThemeToggle() {
+	const { resolvedTheme, setTheme } = useTheme();
+	const toggleTheme = useCallback(() => {
+		setTheme(resolvedTheme === "dark" ? "light" : "dark");
+	}, [resolvedTheme, setTheme]);
+	return (
+		<Button
+			aria-label="Toggle dark mode"
+			onClick={toggleTheme}
+			size="icon"
+			variant="outline"
+		>
+			<SunIcon className="dark:hidden" />
+			<MoonIcon className="hidden dark:block" />
+		</Button>
+	);
+}
 
-  return (
-    <div>
-      <div className="flex flex-row items-center justify-between px-2 py-1">
-        <nav className="flex gap-4 text-lg">
-          {links.map(({ to, label }) => {
-            return (
-              <Link key={to} to={to}>
-                {label}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="flex items-center gap-2">
-          <UserMenu />
-        </div>
-      </div>
-      <hr />
-    </div>
-  );
+export default function Header() {
+	return (
+		<header className="flex items-center justify-between border-border border-b px-4 py-3">
+			<Link className="flex items-baseline gap-3" to="/">
+				<span className="font-display text-xl uppercase leading-none tracking-wide">
+					Valkoinen Monster
+				</span>
+				<span className="hidden text-muted-foreground text-xs uppercase tracking-[0.2em] sm:inline">
+					Energiajuoma · Zero sugar
+				</span>
+			</Link>
+			<div className="flex items-center gap-2">
+				<ThemeToggle />
+				<UserMenu />
+			</div>
+		</header>
+	);
 }

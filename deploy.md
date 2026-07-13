@@ -1,0 +1,251 @@
+# Deploy to an UpCloud VPS
+
+This deployment uses:
+
+- `valkoinen.monster` as the canonical domain
+- `valkonen.monster` as a permanent redirect to the canonical domain
+- the VPS-wide `/etc/caddy/Caddyfile`
+- `127.0.0.1:39281` for the web app
+- `127.0.0.1:39282` for the API
+
+The unusual ports stay private. Only SSH, HTTP, and HTTPS should be exposed by
+the UpCloud and host firewalls.
+
+## 1. Prepare UpCloud and DNS
+
+Create or reuse an Ubuntu LTS server with a public IPv4 address and an SSH key.
+Allow inbound TCP ports `22`, `80`, and `443`. Do not open `39281` or `39282`.
+
+Create these DNS records at the domain provider:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| `A` | `valkoinen.monster` | VPS public IPv4 |
+| `A` | `valkonen.monster` | VPS public IPv4 |
+
+Add matching `AAAA` records only if the VPS has working public IPv6.
+
+On the VPS, enable the same rules in UFW if it is used:
+
+```sh
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+## 2. Install Bun and clone the application
+
+The examples use a dedicated `deploy` user. Skip its creation if the VPS
+already has an equivalent service user.
+
+```sh
+sudo apt update
+sudo apt install -y curl git unzip
+sudo adduser --disabled-password --gecos "" deploy
+sudo -iu deploy bash -lc 'curl -fsSL https://bun.com/install | bash'
+
+sudo mkdir -p /srv/valkoinen-monster
+sudo chown deploy:deploy /srv/valkoinen-monster
+sudo -iu deploy git clone <REPOSITORY_URL> /srv/valkoinen-monster/current
+sudo -iu deploy bash -lc 'cd /srv/valkoinen-monster/current && /home/deploy/.bun/bin/bun ci'
+```
+
+## 3. Make the API port configurable once
+
+The API currently hardcodes port `3000`. Before deploying, change its Elysia
+initialization and listener in `apps/server/src/index.ts` to use the service
+environment:
+
+```ts
+new Elysia({
+	serve: { hostname: process.env.HOST ?? "127.0.0.1" },
+})
+	// existing routes and middleware
+	.listen(process.env.PORT ?? 39282, () => {
+		console.log(`Server is running on ${process.env.HOST ?? "127.0.0.1"}:${process.env.PORT ?? 39282}`);
+	});
+```
+
+Commit that source change so future deployments do not need a VPS-only patch.
+
+## 4. Configure production environment variables
+
+```sh
+sudo install -d -m 750 -o root -g deploy /etc/valkoinen-monster
+sudo touch /etc/valkoinen-monster/api.env /etc/valkoinen-monster/web.env
+sudo chown root:deploy /etc/valkoinen-monster/api.env /etc/valkoinen-monster/web.env
+sudo chmod 640 /etc/valkoinen-monster/api.env /etc/valkoinen-monster/web.env
+```
+
+Put this in `/etc/valkoinen-monster/api.env`:
+
+```dotenv
+NODE_ENV=production
+HOST=127.0.0.1
+PORT=39282
+DATABASE_URL="postgres://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=verify-full"
+BETTER_AUTH_SECRET="REPLACE_WITH_OPENSSL_RAND_HEX_32_OUTPUT"
+BETTER_AUTH_URL="https://valkoinen.monster"
+CORS_ORIGIN="https://valkoinen.monster"
+```
+
+Generate the secret with `openssl rand -hex 32`.
+
+Put this in `/etc/valkoinen-monster/web.env`:
+
+```dotenv
+HOST=127.0.0.1
+PORT=39281
+VITE_SERVER_URL="https://valkoinen.monster"
+```
+
+`VITE_SERVER_URL` is a build-time value, so the web app must be rebuilt when it
+changes.
+
+## 5. Build and migrate
+
+```sh
+cd /srv/valkoinen-monster/current
+sudo -iu deploy bash -lc 'cd /srv/valkoinen-monster/current && /home/deploy/.bun/bin/bun ci'
+
+sudo -u deploy bash -lc '
+  set -a
+  . /etc/valkoinen-monster/web.env
+  set +a
+  cd /srv/valkoinen-monster/current
+  /home/deploy/.bun/bin/bun run --cwd apps/web build
+'
+
+sudo -u deploy bash -lc '
+  set -a
+  . /etc/valkoinen-monster/api.env
+  set +a
+  cd /srv/valkoinen-monster/current
+  /home/deploy/.bun/bin/bun run --cwd apps/server build
+  /home/deploy/.bun/bin/bun run db:migrate
+'
+```
+
+## 6. Add systemd services
+
+Create `/etc/systemd/system/valkoinen-monster-api.service`:
+
+```ini
+[Unit]
+Description=Valkoinen Monster API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/srv/valkoinen-monster/current/apps/server
+EnvironmentFile=/etc/valkoinen-monster/api.env
+ExecStart=/home/deploy/.bun/bin/bun run dist/index.mjs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create `/etc/systemd/system/valkoinen-monster-web.service`:
+
+```ini
+[Unit]
+Description=Valkoinen Monster web
+After=network-online.target valkoinen-monster-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/srv/valkoinen-monster/current/apps/web
+EnvironmentFile=/etc/valkoinen-monster/web.env
+ExecStart=/home/deploy/.bun/bin/bun run dist/server/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start both services:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now valkoinen-monster-api valkoinen-monster-web
+sudo systemctl status valkoinen-monster-api valkoinen-monster-web
+```
+
+## 7. Append to the shared VPS Caddyfile
+
+Do not replace the existing Caddyfile because it contains other services.
+Back it up, then append these site blocks to `/etc/caddy/Caddyfile`:
+
+```sh
+sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.backup
+sudoedit /etc/caddy/Caddyfile
+```
+
+```caddyfile
+valkonen.monster {
+	redir https://valkoinen.monster{uri} permanent
+}
+
+valkoinen.monster {
+	encode zstd gzip
+
+	@api path /api/auth /api/auth/* /trpc /trpc/*
+	handle @api {
+		reverse_proxy 127.0.0.1:39282
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:39281
+	}
+}
+```
+
+Validate before reloading the shared Caddy service:
+
+```sh
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo systemctl reload caddy
+```
+
+Caddy obtains and renews HTTPS certificates automatically after both DNS names
+resolve to the VPS and ports `80` and `443` are reachable.
+
+## 8. Verify
+
+```sh
+curl http://127.0.0.1:39282/
+curl -I http://127.0.0.1:39281/
+curl -I https://valkoinen.monster
+curl -I https://valkonen.monster
+
+sudo journalctl -u valkoinen-monster-api -u valkoinen-monster-web -n 100 --no-pager
+sudo journalctl -u caddy -n 100 --no-pager
+```
+
+The API check should return `OK`, the canonical domain should return the web
+application, and `valkonen.monster` should redirect to `valkoinen.monster`.
+
+## Updating later
+
+```sh
+cd /srv/valkoinen-monster/current
+sudo -iu deploy git -C /srv/valkoinen-monster/current pull --ff-only
+sudo -iu deploy bash -lc 'cd /srv/valkoinen-monster/current && /home/deploy/.bun/bin/bun ci'
+```
+
+Repeat the build and migration commands from step 5, then restart the services:
+
+```sh
+sudo systemctl restart valkoinen-monster-api valkoinen-monster-web
+```

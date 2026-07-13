@@ -4,19 +4,19 @@ import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  server: {
-    port: 3001,
-  },
-  resolve: {
-    tsconfigPaths: true,
-  },
-  plugins: [
-    tailwindcss(),
-    tanstackStart({
-      prerender: {
-        enabled: true,
-      },
-    }),
-    viteReact(),
-  ],
+	plugins: [
+		tailwindcss(),
+		tanstackStart({
+			prerender: {
+				enabled: true,
+			},
+		}),
+		viteReact(),
+	],
+	resolve: {
+		tsconfigPaths: true,
+	},
+	server: {
+		port: 3001,
+	},
 });
