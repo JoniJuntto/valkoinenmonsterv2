@@ -13,6 +13,8 @@ RYBBIT_SITE_ID=766a22932609
 
 Generate the API key in Rybbit: **Settings → Account → API Keys**.
 
+Server-side tracking lives in [`packages/db/src/rybbit-track.ts`](packages/db/src/rybbit-track.ts).
+
 ## Dashboard settings
 
 In your Rybbit site settings, enable:
