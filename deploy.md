@@ -9,7 +9,7 @@ This deployment uses:
 - `valkonen.monster` as a permanent redirect to the canonical domain
 - the VPS-wide `/etc/caddy/Caddyfile`
 - `127.0.0.1:39281` for the web app
-- `127.0.0.1:39282` for the API
+- `127.0.0.1:6283` for the API
 
 The unusual ports stay private. Only SSH, HTTP, and HTTPS should be exposed by
 the UpCloud and host firewalls.
@@ -17,7 +17,7 @@ the UpCloud and host firewalls.
 ## 1. Prepare UpCloud and DNS
 
 Create or reuse an Ubuntu LTS server with a public IPv4 address and an SSH key.
-Allow inbound TCP ports `22`, `80`, and `443`. Do not open `39281` or `39282`.
+Allow inbound TCP ports `22`, `80`, and `443`. Do not open `39281` or `6283`.
 
 Create these DNS records at the domain provider:
 
@@ -44,9 +44,9 @@ apt update
 apt install -y curl git unzip
 curl -fsSL https://bun.com/install | bash
 
-mkdir -p /opt/valkoinenmonsterv2
-git clone <REPOSITORY_URL> /opt/valkoinenmonsterv2/current
-cd /opt/valkoinenmonsterv2/current && /root/.bun/bin/bun ci
+mkdir -p /opt
+git clone <REPOSITORY_URL> /opt/valkoinenmonsterv2
+cd /opt/valkoinenmonsterv2 && /root/.bun/bin/bun ci
 ```
 
 ## 3. Make the API port configurable once
@@ -75,12 +75,12 @@ touch /etc/valkoinenmonsterv2/api.env /etc/valkoinenmonsterv2/web.env
 chmod 600 /etc/valkoinenmonsterv2/api.env /etc/valkoinenmonsterv2/web.env
 ```
 
-Why Put this in `/etc/valkoinenmonsterv2/api.env`:
+What to put in `/etc/valkoinenmonsterv2/api.env`:
 
 ```dotenv
 NODE_ENV=production
 HOST=127.0.0.1
-PORT=39282
+PORT=6283
 DATABASE_URL="postgres://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=verify-full"
 BETTER_AUTH_SECRET="REPLACE_WITH_OPENSSL_RAND_HEX_32_OUTPUT"
 BETTER_AUTH_URL="https://valkoinen.monster"
@@ -103,7 +103,7 @@ changes.
 ## 5. Build and migrate
 
 ```sh
-cd /opt/valkoinenmonsterv2/current
+cd /opt/valkoinenmonsterv2
 /root/.bun/bin/bun ci
 
 set -a
@@ -130,7 +130,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/valkoinenmonsterv2/current/apps/server
+WorkingDirectory=/opt/valkoinenmonsterv2/apps/server
 EnvironmentFile=/etc/valkoinenmonsterv2/api.env
 ExecStart=/root/.bun/bin/bun run dist/index.mjs
 Restart=on-failure
@@ -150,9 +150,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/valkoinenmonsterv2/current/apps/web
+WorkingDirectory=/opt/valkoinenmonsterv2/apps/web
 EnvironmentFile=/etc/valkoinenmonsterv2/web.env
-ExecStart=/root/.bun/bin/bun run dist/server/server.js
+ExecStart=/root/.bun/bin/bun /opt/valkoinenmonsterv2/node_modules/.bun/srvx@0.11.22/node_modules/srvx/bin/srvx.mjs serve --prod --static=/opt/valkoinenmonsterv2/apps/web/dist/client --entry=/opt/valkoinenmonsterv2/apps/web/dist/server/server.js --host=127.0.0.1 --port=39281
 Restart=on-failure
 RestartSec=5
 
@@ -188,7 +188,7 @@ valkoinen.monster {
 
 	@api path /api/auth /api/auth/* /trpc /trpc/*
 	handle @api {
-		reverse_proxy 127.0.0.1:39282
+		reverse_proxy 127.0.0.1:6283
 	}
 
 	handle {
@@ -211,7 +211,7 @@ resolve to the VPS and ports `80` and `443` are reachable.
 ## 8. Verify
 
 ```sh
-curl http://127.0.0.1:39282/
+curl http://127.0.0.1:6283/
 curl -I http://127.0.0.1:39281/
 curl -I https://valkoinen.monster
 curl -I https://valkonen.monster
@@ -225,14 +225,4 @@ application, and `valkonen.monster` should redirect to `valkoinen.monster`.
 
 ## Updating later
 
-```sh
-cd /opt/valkoinenmonsterv2/current
-git pull --ff-only
-/root/.bun/bin/bun ci
-```
-
-Repeat the build and migration commands from step 5, then restart the services:
-
-```sh
-systemctl restart valkoinenmonsterv2-api valkoinenmonsterv2-web
-```
+See [updating.md](./updating.md).

@@ -6,7 +6,7 @@ import { createTRPCOptionsProxy } from "@trpc/tanstack-react-query";
 import type { AppRouter } from "@valkoinenmonsterv2/api/routers/index";
 import { env } from "@valkoinenmonsterv2/env/web";
 import { toast } from "sonner";
-
+import { trackError } from "@/lib/analytics/track";
 import Loader from "./components/loader";
 import { routeTree } from "./routeTree.gen";
 import { TRPCProvider } from "./utils/trpc";
@@ -45,6 +45,7 @@ function createQueryClient() {
 		defaultOptions: { queries: { staleTime: 60 * 1000 } },
 		queryCache: new QueryCache({
 			onError: (error, query) => {
+				trackError(error, { source: "react_query" });
 				toast.error(error.message, {
 					action: {
 						label: "retry",

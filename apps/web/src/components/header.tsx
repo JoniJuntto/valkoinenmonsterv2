@@ -3,13 +3,16 @@ import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import { MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback } from "react";
-
+import { AnalyticsEvents } from "@/lib/analytics/events";
+import { track } from "@/lib/analytics/track";
 import UserMenu from "./user-menu";
 
 function ThemeToggle() {
 	const { resolvedTheme, setTheme } = useTheme();
 	const toggleTheme = useCallback(() => {
-		setTheme(resolvedTheme === "dark" ? "light" : "dark");
+		const nextTheme = resolvedTheme === "dark" ? "light" : "dark";
+		setTheme(nextTheme);
+		track(AnalyticsEvents.ui.themeChanged, { theme: nextTheme });
 	}, [resolvedTheme, setTheme]);
 	return (
 		<Button
@@ -27,7 +30,11 @@ function ThemeToggle() {
 export default function Header() {
 	return (
 		<header className="flex items-center justify-between border-border border-b px-4 py-3">
-			<Link className="flex items-baseline gap-3" to="/">
+			<Link
+				className="flex items-baseline gap-3"
+				data-rybbit-event="nav.logo_clicked"
+				to="/"
+			>
 				<span className="font-display text-xl uppercase leading-none tracking-wide">
 					Valkoinen Monster
 				</span>

@@ -15,6 +15,8 @@ import { evlogErrorHandler } from "evlog/nitro/v3";
 import { ThemeProvider } from "next-themes";
 
 import Header from "../components/header";
+import { RybbitIdentify } from "../components/rybbit-identify";
+import { RybbitProvider } from "../components/rybbit-provider";
 
 import appCss from "../index.css?url";
 export interface RouterAppContext {
@@ -30,6 +32,11 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 			{
 				href: appCss,
 				rel: "stylesheet",
+			},
+			{
+				href: "/valkoinenmonster.webp",
+				rel: "icon",
+				type: "image/webp",
 			},
 		],
 		meta: [
@@ -57,6 +64,8 @@ function RootDocument() {
 				<HeadContent />
 			</head>
 			<body>
+				<RybbitProvider />
+				<RybbitIdentify />
 				<ThemeProvider
 					attribute="class"
 					defaultTheme="light"

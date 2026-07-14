@@ -11,6 +11,7 @@ import {
 	type GameSnapshot,
 	GOLDEN_UPGRADES,
 	goldenUpgradeCost,
+	isGoldenUpgradeId,
 	PRODUCERS,
 	type ProducerId,
 	prestigeRequirement,
@@ -39,7 +40,19 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
-
+import {
+	bucketCans,
+	bucketCps,
+	bucketElapsedMs,
+} from "@/lib/analytics/buckets";
+import { AnalyticsEvents } from "@/lib/analytics/events";
+import { getClickMilestone } from "@/lib/analytics/milestones";
+import {
+	getErrorCode,
+	setUserTraits,
+	track,
+	trackError,
+} from "@/lib/analytics/track";
 import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/utils/trpc";
 
@@ -55,6 +68,21 @@ interface MutationBase {
 }
 
 type MutationAction = (input: MutationBase) => Promise<GameSnapshot>;
+
+type MutationActionName =
+	| "sync"
+	| "buy_producer"
+	| "buy_upgrade"
+	| "trigger_frenzy"
+	| "prestige";
+
+interface MutationOptions {
+	action: MutationActionName;
+	producerId?: ProducerId;
+	producerSource?: "manual" | "smart_stocker";
+	silent?: boolean;
+	upgradeId?: string;
+}
 
 interface ClickLabel {
 	amount: number;
@@ -258,11 +286,6 @@ const CanCard = ({
 					<CardTitle className="font-display text-3xl uppercase leading-none tracking-wide">
 						{isFrenzyActive ? "Frenzy ×10" : "Crack a can"}
 					</CardTitle>
-					<CardDescription>
-						{isFrenzyActive
-							? `${frenzySeconds.toFixed(1)} seconds of golden production`
-							: `${game.nextFrenzyClick} clicks until the next guaranteed frenzy`}
-					</CardDescription>
 				</div>
 				<CardAction>
 					<Button
@@ -526,55 +549,77 @@ const LeaderboardCard = ({
 	entries,
 	isAnonymous,
 	viewerId,
-}: LeaderboardCardProps) => (
-	<Card className="order-4 self-start xl:col-start-1 xl:row-start-2">
-		<CardHeader>
-			<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-				Leaderboard
-			</CardTitle>
-			<CardDescription>
-				Top registered players by lifetime cans.
-			</CardDescription>
-		</CardHeader>
-		<CardContent>
-			{entries.length === 0 ? (
-				<p className="text-muted-foreground">
-					No ranked players yet. Claim the first spot.
-				</p>
-			) : (
-				<ol className="flex flex-col gap-2">
-					{entries.slice(0, 10).map((entry) => (
-						<li
-							className={cn(
-								"grid grid-cols-[2rem_1fr_auto] items-center gap-2 p-2",
-								entry.userId === viewerId && "bg-muted"
-							)}
-							key={entry.userId}
+}: LeaderboardCardProps) => {
+	const leaderboardTrackedRef = useRef(false);
+
+	useEffect(() => {
+		if (entries.length === 0 || leaderboardTrackedRef.current) {
+			return;
+		}
+		leaderboardTrackedRef.current = true;
+		track(AnalyticsEvents.ui.leaderboardViewed, {
+			entry_count: entries.length,
+			is_anonymous: isAnonymous,
+			viewer_on_board: entries.some((entry) => entry.userId === viewerId),
+		});
+	}, [entries, isAnonymous, viewerId]);
+
+	return (
+		<Card className="order-4 self-start xl:col-start-1 xl:row-start-2">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Leaderboard
+				</CardTitle>
+				<CardDescription>
+					Top registered players by lifetime cans.
+				</CardDescription>
+			</CardHeader>
+			<CardContent>
+				{entries.length === 0 ? (
+					<p className="text-muted-foreground">
+						No ranked players yet. Claim the first spot.
+					</p>
+				) : (
+					<ol className="flex flex-col gap-2">
+						{entries.slice(0, 10).map((entry) => (
+							<li
+								className={cn(
+									"grid grid-cols-[2rem_1fr_auto] items-center gap-2 p-2",
+									entry.userId === viewerId && "bg-muted"
+								)}
+								key={entry.userId}
+							>
+								<span className="text-muted-foreground tabular-nums">
+									#{entry.rank}
+								</span>
+								<span className="truncate">{entry.name}</span>
+								<span className="text-right tabular-nums">
+									{formatGameNumber(entry.lifetimeCans)}
+									<small className="block text-muted-foreground">
+										P{entry.prestigeLevel}
+									</small>
+								</span>
+							</li>
+						))}
+					</ol>
+				)}
+			</CardContent>
+			{isAnonymous ? (
+				<CardFooter>
+					<Link className="w-full" to="/login">
+						<Button
+							className="w-full"
+							data-rybbit-event="nav.claim_progress"
+							data-rybbit-prop-source="leaderboard"
 						>
-							<span className="text-muted-foreground tabular-nums">
-								#{entry.rank}
-							</span>
-							<span className="truncate">{entry.name}</span>
-							<span className="text-right tabular-nums">
-								{formatGameNumber(entry.lifetimeCans)}
-								<small className="block text-muted-foreground">
-									P{entry.prestigeLevel}
-								</small>
-							</span>
-						</li>
-					))}
-				</ol>
-			)}
-		</CardContent>
-		{isAnonymous ? (
-			<CardFooter>
-				<Link className="w-full" to="/login">
-					<Button className="w-full">Claim progress to compete</Button>
-				</Link>
-			</CardFooter>
-		) : null}
-	</Card>
-);
+							Claim progress to compete
+						</Button>
+					</Link>
+				</CardFooter>
+			) : null}
+		</Card>
+	);
+};
 
 export const MonsterGame = () => {
 	const trpc = useTRPC();
@@ -596,6 +641,11 @@ export const MonsterGame = () => {
 	const canAudioPoolRef = useRef<HTMLAudioElement[]>([]);
 	const canAudioIndexRef = useRef(0);
 	const dubstepAudioRef = useRef<HTMLAudioElement | null>(null);
+	const totalClicksRef = useRef(0);
+	const gameLoadedTrackedRef = useRef(false);
+	const offlineReturnTrackedRef = useRef(false);
+	const prestigeReadyTrackedRef = useRef(false);
+	const wasFrenzyActiveRef = useRef(false);
 
 	const isAuthenticated = Boolean(sessionQuery.data);
 	const stateQuery = useQuery({
@@ -648,6 +698,50 @@ export const MonsterGame = () => {
 	);
 
 	useEffect(() => {
+		if (!(stateData && session) || gameLoadedTrackedRef.current) {
+			return;
+		}
+		gameLoadedTrackedRef.current = true;
+		const elapsedMs = Date.now() - stateData.lastAccruedAt;
+		if (elapsedMs >= 15_000 && !offlineReturnTrackedRef.current) {
+			offlineReturnTrackedRef.current = true;
+			track(AnalyticsEvents.game.offlineReturn, {
+				elapsed_bucket: bucketElapsedMs(elapsedMs),
+				had_frenzy: Boolean(stateData.frenzyEndsAt),
+				idle_gain_bucket: bucketCans(stateData.cans),
+			});
+		}
+		track(AnalyticsEvents.game.loaded, {
+			is_anonymous: Boolean(session.user.isAnonymous),
+			lifetime_cans_bucket: bucketCans(stateData.lifetimeCans),
+			prestige_level: stateData.prestigeLevel,
+		});
+		setUserTraits({ prestige_level: stateData.prestigeLevel });
+	}, [session, stateData]);
+
+	useEffect(() => {
+		if (!stateData) {
+			return;
+		}
+		prestigeReadyTrackedRef.current = false;
+	}, [stateData?.prestigeLevel]);
+
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const requirement = prestigeRequirement(game.prestigeLevel);
+		if (game.runCans >= requirement && !prestigeReadyTrackedRef.current) {
+			prestigeReadyTrackedRef.current = true;
+			track(AnalyticsEvents.game.prestigeReady, {
+				prestige_level: game.prestigeLevel,
+				reward_golden_cans: prestigeReward(game.runCans, game.prestigeLevel),
+				run_cans_bucket: bucketCans(game.runCans),
+			});
+		}
+	}, [game]);
+
+	useEffect(() => {
 		if (isSessionPending || session || anonymousSignInStarted.current) {
 			return;
 		}
@@ -656,13 +750,20 @@ export const MonsterGame = () => {
 			const result = await authClient.signIn.anonymous();
 			if (result.error) {
 				anonymousSignInStarted.current = false;
+				track(AnalyticsEvents.auth.anonymousFailed, {
+					error_code: "anonymous_sign_in",
+				});
 				toast.error(result.error.message ?? "Could not create a guest save");
 				return;
 			}
+			track(AnalyticsEvents.auth.anonymousSucceeded);
 			await refetchSession();
 		};
 		signIn().catch(() => {
 			anonymousSignInStarted.current = false;
+			track(AnalyticsEvents.auth.anonymousFailed, {
+				error_code: "anonymous_sign_in",
+			});
 			toast.error("Could not create a guest save");
 		});
 	}, [isSessionPending, refetchSession, session]);
@@ -715,12 +816,26 @@ export const MonsterGame = () => {
 		audio.play().catch(() => undefined);
 	}, [isFrenzyActive, isMuted]);
 
+	useEffect(() => {
+		if (wasFrenzyActiveRef.current && !isFrenzyActive && game) {
+			track(AnalyticsEvents.game.frenzyEnded, {
+				duration_ms: FRENZY_DURATION_MS,
+				prestige_level: game.prestigeLevel,
+			});
+		}
+		wasFrenzyActiveRef.current = isFrenzyActive;
+	}, [game, isFrenzyActive]);
+
 	const performMutation = useCallback(
-		async (action: MutationAction, silent = false): Promise<boolean> => {
+		async (
+			action: MutationAction,
+			options: MutationOptions
+		): Promise<boolean> => {
 			const { current } = gameRef;
 			if (!current || mutationLockedRef.current) {
 				return false;
 			}
+			const before = current;
 			mutationLockedRef.current = true;
 			setIsSaving(true);
 			const sentClicks = pendingClicksRef.current;
@@ -738,10 +853,91 @@ export const MonsterGame = () => {
 				);
 				gameRef.current = projected;
 				setGame(projected);
+
+				switch (options.action) {
+					case "buy_producer": {
+						if (!options.producerId) {
+							break;
+						}
+						const source = options.producerSource ?? "manual";
+						const eventName =
+							source === "smart_stocker"
+								? AnalyticsEvents.game.purchaseProducerAuto
+								: AnalyticsEvents.game.purchaseProducer;
+						track(eventName, {
+							cost: producerCost(
+								options.producerId,
+								before.producers[options.producerId]
+							),
+							owned_after: projected.producers[options.producerId],
+							producer_id: options.producerId,
+							source,
+						});
+						break;
+					}
+					case "buy_upgrade": {
+						if (!options.upgradeId) {
+							break;
+						}
+						if (isGoldenUpgradeId(options.upgradeId)) {
+							const rank = projected.goldenUpgrades[options.upgradeId];
+							track(AnalyticsEvents.game.purchaseGoldenUpgrade, {
+								cost_golden: goldenUpgradeCost(
+									options.upgradeId,
+									Math.max(0, rank - 1)
+								),
+								prestige_level: projected.prestigeLevel,
+								rank_after: rank,
+								upgrade_id: options.upgradeId,
+							});
+						} else {
+							const upgrade = RUN_UPGRADES.find(
+								(entry) => entry.id === options.upgradeId
+							);
+							track(AnalyticsEvents.game.purchaseRunUpgrade, {
+								cans_bucket: bucketCans(projected.cans),
+								cost: upgrade?.cost ?? 0,
+								upgrade_id: options.upgradeId,
+							});
+						}
+						break;
+					}
+					case "prestige": {
+						track(AnalyticsEvents.game.prestigeConfirmed, {
+							prestige_level: before.prestigeLevel,
+							reward_golden_cans: prestigeReward(
+								before.runCans,
+								before.prestigeLevel
+							),
+							run_cans_bucket: bucketCans(before.runCans),
+						});
+						setUserTraits({ prestige_level: projected.prestigeLevel });
+						break;
+					}
+					case "trigger_frenzy": {
+						track(AnalyticsEvents.game.frenzyStarted, {
+							cps_bucket: bucketCps(calculateCps(projected)),
+							prestige_level: projected.prestigeLevel,
+							run_cans_bucket: bucketCans(projected.runCans),
+						});
+						break;
+					}
+					default:
+						break;
+				}
+
 				return true;
 			} catch (error) {
 				pendingClicksRef.current += sentClicks;
-				if (!silent) {
+				track(AnalyticsEvents.game.error, {
+					action: options.action,
+					error_code: getErrorCode(error),
+				});
+				trackError(error, {
+					action: options.action,
+					source: "game_mutation",
+				});
+				if (!options.silent) {
 					toast.error(
 						error instanceof Error ? error.message : "Could not save game"
 					);
@@ -766,29 +962,53 @@ export const MonsterGame = () => {
 	);
 
 	const syncNow = useCallback(
-		(silent = true) => performMutation((input) => syncGame(input), silent),
+		() =>
+			performMutation((input) => syncGame(input), {
+				action: "sync",
+				silent: true,
+			}),
 		[performMutation, syncGame]
 	);
 
 	const buyProducerNow = useCallback(
-		(producerId: ProducerId) =>
-			performMutation((input) => buyProducerMutation({ ...input, producerId })),
+		(
+			producerId: ProducerId,
+			producerSource: "manual" | "smart_stocker" = "manual"
+		) =>
+			performMutation(
+				(input) => buyProducerMutation({ ...input, producerId }),
+				{
+					action: "buy_producer",
+					producerId,
+					producerSource,
+				}
+			),
 		[buyProducerMutation, performMutation]
 	);
 
 	const buyUpgradeNow = useCallback(
 		(upgradeId: string) =>
-			performMutation((input) => buyUpgradeMutation({ ...input, upgradeId })),
+			performMutation((input) => buyUpgradeMutation({ ...input, upgradeId }), {
+				action: "buy_upgrade",
+				upgradeId,
+			}),
 		[buyUpgradeMutation, performMutation]
 	);
 
 	const triggerFrenzyNow = useCallback(
-		() => performMutation((input) => triggerFrenzyMutation(input), true),
+		() =>
+			performMutation((input) => triggerFrenzyMutation(input), {
+				action: "trigger_frenzy",
+				silent: true,
+			}),
 		[performMutation, triggerFrenzyMutation]
 	);
 
 	const prestigeNow = useCallback(
-		() => performMutation((input) => prestigeMutation(input)),
+		() =>
+			performMutation((input) => prestigeMutation(input), {
+				action: "prestige",
+			}),
 		[performMutation, prestigeMutation]
 	);
 
@@ -801,7 +1021,7 @@ export const MonsterGame = () => {
 			if (current.goldenUpgrades["smart-stocker"] > 0) {
 				const producerId = cheapestAffordableProducer(current, current.cans);
 				if (producerId) {
-					buyProducerNow(producerId).catch(() => undefined);
+					buyProducerNow(producerId, "smart_stocker").catch(() => undefined);
 					return;
 				}
 			}
@@ -840,10 +1060,20 @@ export const MonsterGame = () => {
 		}
 		playCanSound();
 		pendingClicksRef.current += 1;
+		totalClicksRef.current += 1;
+		const milestone = getClickMilestone(totalClicksRef.current);
 		const now = Date.now();
 		const frenzyActive = (current.frenzyEndsAt ?? 0) > now;
 		const amount =
 			calculateClickValue(current) * (frenzyActive ? FRENZY_MULTIPLIER : 1);
+		if (milestone) {
+			track(AnalyticsEvents.game.clickMilestone, {
+				click_value: amount,
+				is_frenzy_active: frenzyActive,
+				milestone,
+				prestige_level: current.prestigeLevel,
+			});
+		}
 		const triggersFrenzy = !frenzyActive && current.nextFrenzyClick <= 1;
 		updateGame((state) => {
 			const nextFrenzyClick = frenzyActive
@@ -893,11 +1123,18 @@ export const MonsterGame = () => {
 		);
 		if (confirmed) {
 			prestigeNow().catch(() => undefined);
+		} else {
+			track(AnalyticsEvents.game.prestigeCancelled, {
+				prestige_level: current.prestigeLevel,
+			});
 		}
 	}, [prestigeNow]);
 
 	const toggleMute = useCallback(() => {
-		setIsMuted((muted) => !muted);
+		setIsMuted((muted) => {
+			track(AnalyticsEvents.ui.audioToggled, { muted: !muted });
+			return !muted;
+		});
 	}, []);
 	const handleBuyProducer = useCallback(
 		(producerId: ProducerId) => {

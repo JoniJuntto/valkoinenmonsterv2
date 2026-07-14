@@ -13,6 +13,8 @@ export const env = createEnv({
 		NODE_ENV: z
 			.enum(["development", "production", "test"])
 			.default("development"),
+		RYBBIT_API_KEY: z.string().optional(),
+		RYBBIT_SITE_ID: z.string().default("766a22932609"),
 	},
 	skipValidation: !!process.env.SKIP_ENV_VALIDATION,
 });

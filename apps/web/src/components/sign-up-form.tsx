@@ -5,7 +5,8 @@ import { Input } from "@valkoinenmonsterv2/ui/components/input";
 import { Label } from "@valkoinenmonsterv2/ui/components/label";
 import { toast } from "sonner";
 import z from "zod";
-
+import { AnalyticsEvents } from "@/lib/analytics/events";
+import { track } from "@/lib/analytics/track";
 import { authClient } from "@/lib/auth-client";
 
 import Loader from "./loader";
@@ -27,6 +28,7 @@ export default function SignUpForm({
 			password: "",
 		},
 		onSubmit: async ({ value }) => {
+			track(AnalyticsEvents.auth.signUpSubmitted);
 			await authClient.signUp.email(
 				{
 					email: value.email,
@@ -35,9 +37,13 @@ export default function SignUpForm({
 				},
 				{
 					onError: (error) => {
+						track(AnalyticsEvents.auth.signUpFailed, {
+							error_code: "sign_up_failed",
+						});
 						toast.error(error.error.message || error.error.statusText);
 					},
 					onSuccess: () => {
+						track(AnalyticsEvents.auth.signUpSucceeded);
 						navigate({
 							to: "/",
 						});
@@ -78,6 +84,7 @@ export default function SignUpForm({
 							<div className="space-y-2">
 								<Label htmlFor={field.name}>Name</Label>
 								<Input
+									className="rr-mask"
 									id={field.name}
 									name={field.name}
 									onBlur={field.handleBlur}
@@ -100,6 +107,7 @@ export default function SignUpForm({
 							<div className="space-y-2">
 								<Label htmlFor={field.name}>Email</Label>
 								<Input
+									className="rr-mask"
 									id={field.name}
 									name={field.name}
 									onBlur={field.handleBlur}
@@ -123,6 +131,7 @@ export default function SignUpForm({
 							<div className="space-y-2">
 								<Label htmlFor={field.name}>Password</Label>
 								<Input
+									className="rr-mask"
 									id={field.name}
 									name={field.name}
 									onBlur={field.handleBlur}
@@ -161,6 +170,9 @@ export default function SignUpForm({
 			<div className="mt-4 text-center">
 				<Button
 					className="text-indigo-600 hover:text-indigo-800"
+					data-rybbit-event="auth.form.switched"
+					data-rybbit-prop-from="sign_up"
+					data-rybbit-prop-to="sign_in"
 					onClick={onSwitchToSignIn}
 					variant="link"
 				>

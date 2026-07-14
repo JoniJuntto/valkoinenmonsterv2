@@ -6,6 +6,8 @@ import { Label } from "@valkoinenmonsterv2/ui/components/label";
 import { toast } from "sonner";
 import z from "zod";
 
+import { AnalyticsEvents } from "@/lib/analytics/events";
+import { track } from "@/lib/analytics/track";
 import { authClient } from "@/lib/auth-client";
 
 import Loader from "./loader";
@@ -26,6 +28,7 @@ export default function SignInForm({
 			password: "",
 		},
 		onSubmit: async ({ value }) => {
+			track(AnalyticsEvents.auth.signInSubmitted);
 			await authClient.signIn.email(
 				{
 					email: value.email,
@@ -33,9 +36,13 @@ export default function SignInForm({
 				},
 				{
 					onError: (error) => {
+						track(AnalyticsEvents.auth.signInFailed, {
+							error_code: "sign_in_failed",
+						});
 						toast.error(error.error.message || error.error.statusText);
 					},
 					onSuccess: () => {
+						track(AnalyticsEvents.auth.signInSucceeded);
 						navigate({
 							to: "/",
 						});
@@ -75,6 +82,7 @@ export default function SignInForm({
 							<div className="space-y-2">
 								<Label htmlFor={field.name}>Email</Label>
 								<Input
+									className="rr-mask"
 									id={field.name}
 									name={field.name}
 									onBlur={field.handleBlur}
@@ -98,6 +106,7 @@ export default function SignInForm({
 							<div className="space-y-2">
 								<Label htmlFor={field.name}>Password</Label>
 								<Input
+									className="rr-mask"
 									id={field.name}
 									name={field.name}
 									onBlur={field.handleBlur}
@@ -136,6 +145,9 @@ export default function SignInForm({
 			<div className="mt-4 text-center">
 				<Button
 					className="text-indigo-600 hover:text-indigo-800"
+					data-rybbit-event="auth.form.switched"
+					data-rybbit-prop-from="sign_in"
+					data-rybbit-prop-to="sign_up"
 					onClick={onSwitchToSignUp}
 					variant="link"
 				>

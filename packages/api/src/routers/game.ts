@@ -1,5 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { db } from "@valkoinenmonsterv2/db";
+import {
+	bucketCans,
+	trackServerEvent,
+} from "@valkoinenmonsterv2/db/rybbit-track";
 import { user } from "@valkoinenmonsterv2/db/schema/auth";
 import {
 	type GameStateRow,
@@ -7,7 +11,6 @@ import {
 } from "@valkoinenmonsterv2/db/schema/game";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-
 import {
 	acceptManualClicks,
 	calculateClickValue,
@@ -453,14 +456,28 @@ export const gameRouter = router({
 	),
 	prestige: protectedProcedure
 		.input(mutationInput)
-		.mutation(({ ctx, input }) =>
-			mutateGameState(
+		.mutation(async ({ ctx, input }) => {
+			const before = normalizeState(await ensureGameState(ctx.session.user.id));
+			const requirement = prestigeRequirement(before.prestigeLevel);
+			const reward = prestigeReward(before.runCans, before.prestigeLevel);
+			const snapshot = await mutateGameState(
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
 				input,
 				prestige
-			)
-		),
+			);
+			trackServerEvent(
+				"game.prestige.completed",
+				{
+					prestige_level_before: before.prestigeLevel,
+					requirement,
+					reward_golden_cans: reward,
+					run_cans_bucket: bucketCans(before.runCans),
+				},
+				ctx.session.user.id
+			).catch(() => undefined);
+			return snapshot;
+		}),
 	sync: protectedProcedure
 		.input(mutationInput)
 		.mutation(({ ctx, input }) =>

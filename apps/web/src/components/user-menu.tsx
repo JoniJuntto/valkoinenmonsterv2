@@ -11,6 +11,8 @@ import {
 } from "@valkoinenmonsterv2/ui/components/dropdown-menu";
 import { Skeleton } from "@valkoinenmonsterv2/ui/components/skeleton";
 
+import { AnalyticsEvents } from "@/lib/analytics/events";
+import { clearUser, track } from "@/lib/analytics/track";
 import { authClient } from "@/lib/auth-client";
 
 export default function UserMenu() {
@@ -24,7 +26,13 @@ export default function UserMenu() {
 	if (!session || session.user.isAnonymous) {
 		return (
 			<Link to="/login">
-				<Button variant="outline">Claim progress</Button>
+				<Button
+					data-rybbit-event="nav.claim_progress"
+					data-rybbit-prop-source="header"
+					variant="outline"
+				>
+					Claim progress
+				</Button>
 			</Link>
 		);
 	}
@@ -41,6 +49,8 @@ export default function UserMenu() {
 					<DropdownMenuItem>{session.user.email}</DropdownMenuItem>
 					<DropdownMenuItem
 						onClick={() => {
+							track(AnalyticsEvents.auth.signOut);
+							clearUser();
 							authClient.signOut({
 								fetchOptions: {
 									onSuccess: () => {
