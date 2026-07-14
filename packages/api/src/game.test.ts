@@ -62,10 +62,12 @@ describe("Monster game economy", () => {
 	test("calculates prestige and golden upgrade costs", () => {
 		expect(prestigeRequirement(0)).toBe(100_000);
 		expect(prestigeRequirement(1)).toBe(200_000);
-		expect(prestigeRequirement(2)).toBe(300_000);
+		expect(prestigeRequirement(2)).toBe(400_000);
 		expect(prestigeReward(99_999, 0)).toBe(0);
 		expect(prestigeReward(100_000, 0)).toBe(1);
-		expect(prestigeReward(800_000, 1)).toBe(2);
+		expect(prestigeReward(299_999, 0)).toBe(1);
+		expect(prestigeReward(300_000, 0)).toBe(2);
+		expect(prestigeReward(600_000, 1)).toBe(2);
 		expect(goldenUpgradeCost("auto-tapper", 0)).toBe(4);
 		expect(goldenUpgradeCost("auto-tapper", 4)).toBe(64);
 		expect(
@@ -98,5 +100,6 @@ describe("validated accrual", () => {
 		expect(FRENZY_DURATION_MS).toBe(8000);
 		expect(calculateIdleGain(progress, 10_000, 2000, 1)).toBe(28);
 		expect(calculateIdleGain(progress, 10_000, 2000, 2)).toBe(56);
+		expect(calculateIdleGain(progress, 10_000, 2000, 0.1)).toBeCloseTo(2.8);
 	});
 });

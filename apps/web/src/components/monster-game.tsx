@@ -12,6 +12,7 @@ import {
 	GOLDEN_UPGRADES,
 	goldenUpgradeCost,
 	isGoldenUpgradeId,
+	OFFLINE_PRODUCTION_MULTIPLIER,
 	PRODUCERS,
 	type ProducerId,
 	prestigeRequirement,
@@ -60,6 +61,17 @@ const HEARTBEAT_MS = 5000;
 const DISPLAY_TICK_MS = 100;
 const CAN_AUDIO_POOL_SIZE = 6;
 const PARTICLES = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+
+const formatElapsedTime = (elapsedMs: number): string => {
+	const totalSeconds = Math.floor(elapsedMs / 1000);
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
+	if (hours > 0) {
+		return `${hours}h ${minutes}m`;
+	}
+	return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+};
 
 interface MutationBase {
 	operationId: string;
@@ -187,8 +199,8 @@ const NUTRITION_ROWS: {
 ];
 
 const StatsCard = ({ game, isSaving, onPrestige }: StatsCardProps) => {
-	const requirement = prestigeRequirement(game.prestigeLevel);
-	const reward = prestigeReward(game.runCans, game.prestigeLevel);
+	const requirement = prestigeRequirement(game.totalGoldenCans);
+	const reward = prestigeReward(game.runCans, game.totalGoldenCans);
 	return (
 		<Card className="order-2 gap-0 self-start py-0 ring-foreground xl:col-start-1 xl:row-start-1">
 			<div className="p-(--card-spacing) pb-3">
@@ -643,7 +655,7 @@ export const MonsterGame = () => {
 	const dubstepAudioRef = useRef<HTMLAudioElement | null>(null);
 	const totalClicksRef = useRef(0);
 	const gameLoadedTrackedRef = useRef(false);
-	const offlineReturnTrackedRef = useRef(false);
+	const lastIdleReportAtRef = useRef(0);
 	const prestigeReadyTrackedRef = useRef(false);
 	const wasFrenzyActiveRef = useRef(false);
 
@@ -702,15 +714,6 @@ export const MonsterGame = () => {
 			return;
 		}
 		gameLoadedTrackedRef.current = true;
-		const elapsedMs = Date.now() - stateData.lastAccruedAt;
-		if (elapsedMs >= 15_000 && !offlineReturnTrackedRef.current) {
-			offlineReturnTrackedRef.current = true;
-			track(AnalyticsEvents.game.offlineReturn, {
-				elapsed_bucket: bucketElapsedMs(elapsedMs),
-				had_frenzy: Boolean(stateData.frenzyEndsAt),
-				idle_gain_bucket: bucketCans(stateData.cans),
-			});
-		}
 		track(AnalyticsEvents.game.loaded, {
 			is_anonymous: Boolean(session.user.isAnonymous),
 			lifetime_cans_bucket: bucketCans(stateData.lifetimeCans),
@@ -720,22 +723,37 @@ export const MonsterGame = () => {
 	}, [session, stateData]);
 
 	useEffect(() => {
-		if (!stateData) {
+		const idleReport = stateData?.idleReport;
+		const idleReportAt = stateData?.lastAccruedAt ?? 0;
+		if (!idleReport || idleReportAt <= lastIdleReportAtRef.current) {
 			return;
 		}
-		prestigeReadyTrackedRef.current = false;
-	}, [stateData?.prestigeLevel]);
+		lastIdleReportAtRef.current = idleReportAt;
+		const averageCps = idleReport.cansEarned / (idleReport.elapsedMs / 1000);
+		const offlineRate =
+			OFFLINE_PRODUCTION_MULTIPLIER *
+			((stateData?.goldenUpgrades["time-capsule"] ?? 0) > 0 ? 2 : 1);
+		toast.success("Welcome back", {
+			description: `${formatElapsedTime(idleReport.elapsedMs)} away · ${formatGameNumber(idleReport.cansEarned)} cans · ${formatGameNumber(averageCps)} cans/s average · ${offlineRate * 100}% idle rate`,
+			duration: 12_000,
+		});
+		track(AnalyticsEvents.game.offlineReturn, {
+			elapsed_bucket: bucketElapsedMs(idleReport.elapsedMs),
+			had_frenzy: idleReport.hadFrenzy,
+			idle_gain_bucket: bucketCans(idleReport.cansEarned),
+		});
+	}, [stateData]);
 
 	useEffect(() => {
 		if (!game) {
 			return;
 		}
-		const requirement = prestigeRequirement(game.prestigeLevel);
+		const requirement = prestigeRequirement(game.totalGoldenCans);
 		if (game.runCans >= requirement && !prestigeReadyTrackedRef.current) {
 			prestigeReadyTrackedRef.current = true;
 			track(AnalyticsEvents.game.prestigeReady, {
 				prestige_level: game.prestigeLevel,
-				reward_golden_cans: prestigeReward(game.runCans, game.prestigeLevel),
+				reward_golden_cans: prestigeReward(game.runCans, game.totalGoldenCans),
 				run_cans_bucket: bucketCans(game.runCans),
 			});
 		}
@@ -903,11 +921,12 @@ export const MonsterGame = () => {
 						break;
 					}
 					case "prestige": {
+						prestigeReadyTrackedRef.current = false;
 						track(AnalyticsEvents.game.prestigeConfirmed, {
 							prestige_level: before.prestigeLevel,
 							reward_golden_cans: prestigeReward(
 								before.runCans,
-								before.prestigeLevel
+								before.totalGoldenCans
 							),
 							run_cans_bucket: bucketCans(before.runCans),
 						});
@@ -1116,7 +1135,7 @@ export const MonsterGame = () => {
 		if (!current) {
 			return;
 		}
-		const reward = prestigeReward(current.runCans, current.prestigeLevel);
+		const reward = prestigeReward(current.runCans, current.totalGoldenCans);
 		// biome-ignore lint/suspicious/noAlert: The agreed game flow uses the browser's native confirmation.
 		const confirmed = window.confirm(
 			`Reset this run for ${reward} golden cans? Permanent upgrades and lifetime cans stay.`

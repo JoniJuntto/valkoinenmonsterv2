@@ -85,6 +85,7 @@ describe("server-authoritative mutations", () => {
 	test("increases the prestige requirement after each reset", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.prestigeLevel = 1;
+		state.totalGoldenCans = 1;
 		state.runCans = 100_000;
 		expect(() => prestige(state, new Date(0))).toThrow("Prestige is not ready");
 
@@ -96,12 +97,18 @@ describe("server-authoritative mutations", () => {
 });
 
 describe("server accrual and leaderboard", () => {
-	test("accrues long offline intervals without a time cap", () => {
+	test("accrues long offline intervals at 10% without a time cap", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.producers["mini-fridge"] = 1;
 		const weekMs = 7 * 24 * 60 * 60 * 1000;
 		const accrued = accrueState(state, 0, new Date(weekMs));
-		expect(accrued.cans).toBe(weekMs / 1000);
+		expect(accrued.cans).toBe(weekMs / 10_000);
+
+		const boostedState = createDefaultGameState("boosted-user", new Date(0));
+		boostedState.producers["mini-fridge"] = 1;
+		boostedState.goldenUpgrades["time-capsule"] = 1;
+		const boosted = accrueState(boostedState, 0, new Date(weekMs));
+		expect(boosted.cans).toBe(weekMs / 5000);
 	});
 
 	test("uses exactly the remaining frenzy duration", () => {

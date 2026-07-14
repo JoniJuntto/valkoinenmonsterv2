@@ -30,6 +30,7 @@ import {
 	isGoldenUpgradeId,
 	isProducerId,
 	isRunUpgradeId,
+	OFFLINE_PRODUCTION_MULTIPLIER,
 	PRODUCERS,
 	type ProducerCounts,
 	prestigeRequirement,
@@ -176,8 +177,9 @@ export const accrueState = (
 	const frenzyEndMs = state.frenzyEndsAt?.getTime() ?? 0;
 	const frenzyIdleMs = Math.max(0, Math.min(nowMs, frenzyEndMs) - previousMs);
 	const offlineMultiplier =
-		elapsedMs >= OFFLINE_AFTER_MS && state.goldenUpgrades["time-capsule"] > 0
-			? 2
+		elapsedMs >= OFFLINE_AFTER_MS
+			? OFFLINE_PRODUCTION_MULTIPLIER *
+				(state.goldenUpgrades["time-capsule"] > 0 ? 2 : 1)
 			: 1;
 	const idleGain = calculateIdleGain(
 		state,
@@ -222,6 +224,7 @@ const toSnapshot = (
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
 	goldenCans: state.goldenCans,
 	goldenUpgrades: state.goldenUpgrades,
+	idleReport: null,
 	isAnonymous,
 	isShadowBanned: state.shadowBanned,
 	lastAccruedAt: state.lastAccruedAt.getTime(),
@@ -240,7 +243,8 @@ const mutateGameState = async (
 	userId: string,
 	isAnonymous: boolean,
 	input: MutationInput,
-	mutation: GameMutation = (state) => state
+	mutation: GameMutation = (state) => state,
+	reportIdle = false
 ): Promise<GameSnapshot> => {
 	const current = normalizeState(await ensureGameState(userId));
 	const serverNow = Date.now();
@@ -273,7 +277,21 @@ const mutateGameState = async (
 			message: "Game state changed; reloading save",
 		});
 	}
-	return toSnapshot(normalizeState(saved), isAnonymous, serverNow);
+	const snapshot = toSnapshot(normalizeState(saved), isAnonymous, serverNow);
+	const idleElapsedMs = serverNow - current.lastAccruedAt.getTime();
+	if (!(reportIdle && idleElapsedMs >= OFFLINE_AFTER_MS)) {
+		return snapshot;
+	}
+	return {
+		...snapshot,
+		idleReport: {
+			cansEarned: Math.max(0, snapshot.lifetimeCans - current.lifetimeCans),
+			elapsedMs: idleElapsedMs,
+			hadFrenzy:
+				current.frenzyEndsAt !== null &&
+				current.frenzyEndsAt.getTime() > current.lastAccruedAt.getTime(),
+		},
+	};
 };
 
 export const getMutationDisposition = (
@@ -305,7 +323,8 @@ const getGameState = async (
 			pendingManualClicks: 0,
 			revision: current.revision,
 		},
-		(state) => state
+		(state) => state,
+		true
 	);
 };
 
@@ -399,8 +418,8 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 };
 
 export const prestige: GameMutation = (state) => {
-	const requirement = prestigeRequirement(state.prestigeLevel);
-	const reward = prestigeReward(state.runCans, state.prestigeLevel);
+	const requirement = prestigeRequirement(state.totalGoldenCans);
+	const reward = prestigeReward(state.runCans, state.totalGoldenCans);
 	if (state.runCans < requirement || reward < 1) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -458,8 +477,8 @@ export const gameRouter = router({
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
 			const before = normalizeState(await ensureGameState(ctx.session.user.id));
-			const requirement = prestigeRequirement(before.prestigeLevel);
-			const reward = prestigeReward(before.runCans, before.prestigeLevel);
+			const requirement = prestigeRequirement(before.totalGoldenCans);
+			const reward = prestigeReward(before.runCans, before.totalGoldenCans);
 			const snapshot = await mutateGameState(
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),

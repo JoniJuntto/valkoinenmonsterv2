@@ -4,6 +4,7 @@ export const FRENZY_DURATION_MS = 8000;
 export const PRESTIGE_THRESHOLD = 100_000;
 export const MANUAL_CLICKS_PER_SECOND = 20;
 export const MAX_MANUAL_CLICK_BUDGET = 120;
+export const OFFLINE_PRODUCTION_MULTIPLIER = 0.1;
 
 export const PRODUCERS = [
 	{ baseCost: 15, baseCps: 0.1, id: "pull-tab", name: "Pull Tab" },
@@ -173,6 +174,11 @@ export interface GameSnapshot extends GameProgress {
 	cans: number;
 	frenzyEndsAt: number | null;
 	goldenCans: number;
+	idleReport: {
+		cansEarned: number;
+		elapsedMs: number;
+		hadFrenzy: boolean;
+	} | null;
 	isAnonymous: boolean;
 	isShadowBanned: boolean;
 	lastAccruedAt: number;
@@ -356,7 +362,7 @@ export const calculateIdleGain = (
 	progress: GameProgress,
 	elapsedMs: number,
 	frenzyMs: number,
-	offlineMultiplier: number
+	productionMultiplier: number
 ): number => {
 	const safeElapsedMs = Math.max(0, elapsedMs);
 	const safeFrenzyMs = Math.min(safeElapsedMs, Math.max(0, frenzyMs));
@@ -364,19 +370,21 @@ export const calculateIdleGain = (
 	return clampGameValue(
 		calculateCps(progress) *
 			((normalMs + safeFrenzyMs * FRENZY_MULTIPLIER) / 1000) *
-			Math.max(1, offlineMultiplier)
+			Math.max(0, productionMultiplier)
 	);
 };
 
-export const prestigeRequirement = (prestigeLevel: number): number =>
-	PRESTIGE_THRESHOLD * (prestigeLevel + 1);
+export const prestigeRequirement = (totalGoldenCans: number): number =>
+	PRESTIGE_THRESHOLD * 2 ** totalGoldenCans;
 
 export const prestigeReward = (
 	runCans: number,
-	prestigeLevel: number
+	totalGoldenCans: number
 ): number =>
 	Math.floor(
-		Math.sqrt(clampGameValue(runCans) / prestigeRequirement(prestigeLevel))
+		Math.log2(
+			clampGameValue(runCans) / prestigeRequirement(totalGoldenCans) + 1
+		)
 	);
 
 export const frenzyChance = (progress: GameProgress): number =>
