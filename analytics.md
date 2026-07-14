@@ -2,6 +2,8 @@
 
 Site ID: `766a22932609`
 
+Client tracking uses the official Rybbit script in [`apps/web/src/routes/__root.tsx`](apps/web/src/routes/__root.tsx) (`script.js` + `data-site-id`). Custom events call `window.rybbit` after the script loads via [`RybbitProvider`](apps/web/src/components/rybbit-provider.tsx).
+
 ## Environment variables
 
 Add to server `.env` (optional but required for server-side events):

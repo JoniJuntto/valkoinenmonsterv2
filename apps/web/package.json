@@ -9,7 +9,6 @@
     "dev": "vite dev"
   },
   "dependencies": {
-    "@rybbit/js": "^0.6.2",
     "@tailwindcss/vite": "^4.3.2",
     "@tanstack/react-form": "^1.33.0",
     "@tanstack/react-query": "^5.101.2",
@@ -30,7 +29,6 @@
     "nitro": "^3.0.260610-beta",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "rrweb": "^2.1.0",
     "sonner": "catalog:",
     "srvx": "^0.11.22",
     "tailwindcss": "catalog:",

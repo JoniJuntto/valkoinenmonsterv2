@@ -1,40 +1,40 @@
-import rybbit from "@rybbit/js";
 import { useEffect } from "react";
 
-import {
-	markRybbitCleanedUp,
-	markRybbitInitialized,
-} from "@/lib/analytics/track";
+import { markRybbitInitialized } from "@/lib/analytics/track";
 
-const RYBBIT_SITE_ID = "766a22932609";
+const RYBBIT_READY_TIMEOUT_MS = 10_000;
+
+function waitForRybbit(): Promise<void> {
+	if (typeof window === "undefined") {
+		return Promise.resolve();
+	}
+	if (window.rybbit) {
+		return Promise.resolve();
+	}
+
+	return new Promise((resolve, reject) => {
+		const startedAt = Date.now();
+		const interval = window.setInterval(() => {
+			if (window.rybbit) {
+				window.clearInterval(interval);
+				resolve();
+				return;
+			}
+			if (Date.now() - startedAt >= RYBBIT_READY_TIMEOUT_MS) {
+				window.clearInterval(interval);
+				reject(new Error("Rybbit script did not load"));
+			}
+		}, 50);
+	});
+}
 
 export function RybbitProvider() {
 	useEffect(() => {
-		let cancelled = false;
-
-		rybbit
-			.init({
-				analyticsHost: "https://app.rybbit.io/api",
-				debounceDuration: 300,
-				debug: import.meta.env.DEV,
-				replayPrivacyConfig: {
-					maskAllInputs: true,
-					maskTextSelectors: [".rr-mask"],
-				},
-				siteId: RYBBIT_SITE_ID,
-			})
+		waitForRybbit()
 			.then(() => {
-				if (!cancelled) {
-					markRybbitInitialized();
-				}
+				markRybbitInitialized();
 			})
 			.catch(() => undefined);
-
-		return () => {
-			cancelled = true;
-			markRybbitCleanedUp();
-			rybbit.cleanup();
-		};
 	}, []);
 
 	return null;

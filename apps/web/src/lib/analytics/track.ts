@@ -1,26 +1,27 @@
-import rybbit from "@rybbit/js";
-
 import type { AnalyticsProperties } from "./events";
 
 let initialized = false;
+
+function getRybbit() {
+	if (typeof window === "undefined") {
+		return null;
+	}
+	return window.rybbit ?? null;
+}
 
 export function markRybbitInitialized() {
 	initialized = true;
 }
 
-export function markRybbitCleanedUp() {
-	initialized = false;
-}
-
 function canTrack() {
-	return initialized && typeof window !== "undefined";
+	return initialized && getRybbit() !== null;
 }
 
 export function track(eventName: string, properties?: AnalyticsProperties) {
 	if (!canTrack()) {
 		return;
 	}
-	rybbit.event(eventName, properties);
+	getRybbit()?.event(eventName, properties);
 }
 
 export function identifyUser(
@@ -30,7 +31,7 @@ export function identifyUser(
 	if (!canTrack()) {
 		return;
 	}
-	rybbit.identify(userId, traits);
+	getRybbit()?.identify(userId, traits);
 }
 
 export function setUserTraits(
@@ -39,14 +40,14 @@ export function setUserTraits(
 	if (!canTrack()) {
 		return;
 	}
-	rybbit.setTraits(traits);
+	getRybbit()?.setTraits(traits);
 }
 
 export function clearUser() {
 	if (!canTrack()) {
 		return;
 	}
-	rybbit.clearUserId();
+	getRybbit()?.clearUserId();
 }
 
 export function trackError(error: unknown, context?: AnalyticsProperties) {
@@ -57,7 +58,7 @@ export function trackError(error: unknown, context?: AnalyticsProperties) {
 		error instanceof Error
 			? error
 			: new Error(typeof error === "string" ? error : "Unknown error");
-	rybbit.error(normalized, context);
+	getRybbit()?.error(normalized, context);
 }
 
 export function getErrorCode(error: unknown): string {

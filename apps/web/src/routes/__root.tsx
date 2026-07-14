@@ -51,6 +51,13 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 				title: "Valkoinen Monster Clicker",
 			},
 		],
+		scripts: [
+			{
+				"data-site-id": "766a22932609",
+				defer: true,
+				src: "https://app.rybbit.io/api/script.js",
+			},
+		],
 	}),
 	server: {
 		middleware: [createMiddleware().server(evlogErrorHandler)],
