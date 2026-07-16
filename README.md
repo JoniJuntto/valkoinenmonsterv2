@@ -46,7 +46,53 @@ bun run dev
 ```
 
 Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
-The API is running at [http://localhost:3000](http://localhost:3000).
+The API is running at [http://localhost:6283](http://localhost:6283).
+
+## JSON Agent Game Mode
+
+Development and test servers expose `POST /api/game/json` so an AI agent can
+play the same authenticated save without browser automation. The route is not
+registered in production.
+
+Create an anonymous account and keep its Better Auth session cookie:
+
+```bash
+curl -c .agent-game-cookies \
+  -H 'Content-Type: application/json' \
+  -d '{}' \
+  http://localhost:6283/api/auth/sign-in/anonymous
+```
+
+Then observe the game:
+
+```bash
+curl -b .agent-game-cookies \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"observe"}' \
+  http://localhost:6283/api/game/json
+```
+
+Every response contains the canonical save, derived statistics, the full shop,
+the visible top-ten leaderboard, and `legalActions`. Each legal action is a
+complete command that can be posted back unchanged. Mutating commands use a
+unique UUID `operationId` for immediate-retry idempotency.
+
+Available commands:
+
+```json
+{ "action": "observe" }
+{ "action": "click", "count": 20, "operationId": "<uuid>" }
+{ "action": "buy_producer", "producerId": "pull-tab", "operationId": "<uuid>" }
+{ "action": "buy_upgrade", "upgradeId": "cold-can", "operationId": "<uuid>" }
+{ "action": "wait", "milliseconds": 5000, "operationId": "<uuid>" }
+{ "action": "prestige", "operationId": "<uuid>" }
+{ "action": "reset", "confirm": "RESET", "operationId": "<uuid>" }
+```
+
+`click.count` accepts `1`–`10000` but still enforces the normal server click
+budget. `wait.milliseconds` accepts `1`–`3600000`, advances online production,
+and runs Smart Stocker on the same five-second heartbeat as the web game.
+Resetting irreversibly clears the authenticated account's game progress.
 
 ## UI Customization
 

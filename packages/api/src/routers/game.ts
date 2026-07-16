@@ -14,7 +14,9 @@ import { z } from "zod";
 import {
 	acceptManualClicks,
 	calculateClickValue,
+	calculateCps,
 	calculateIdleGain,
+	cheapestAffordableProducer,
 	clampGameValue,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
@@ -36,11 +38,14 @@ import {
 	prestigeRequirement,
 	prestigeReward,
 	producerCost,
+	RUN_UPGRADES,
 	randomFrenzyThreshold,
 } from "../game";
 import { protectedProcedure, router } from "../index";
 
 const OFFLINE_AFTER_MS = 15_000;
+const AGENT_HEARTBEAT_MS = 5000;
+const MAX_AGENT_WAIT_MS = 60 * 60 * 1000;
 
 const mutationInput = z.object({
 	operationId: z.uuid(),
@@ -48,7 +53,50 @@ const mutationInput = z.object({
 	revision: z.number().int().nonnegative(),
 });
 
+const agentOperationId = { operationId: z.uuid() };
+
+export const agentGameCommandSchema = z.discriminatedUnion("action", [
+	z.object({ action: z.literal("observe") }).strict(),
+	z
+		.object({
+			action: z.literal("click"),
+			count: z.number().int().min(1).max(10_000),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("buy_producer"),
+			producerId: z.string(),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("buy_upgrade"),
+			upgradeId: z.string(),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("wait"),
+			milliseconds: z.number().int().min(1).max(MAX_AGENT_WAIT_MS),
+			...agentOperationId,
+		})
+		.strict(),
+	z.object({ action: z.literal("prestige"), ...agentOperationId }).strict(),
+	z
+		.object({
+			action: z.literal("reset"),
+			confirm: z.literal("RESET"),
+			...agentOperationId,
+		})
+		.strict(),
+]);
+
 export type MutationInput = z.infer<typeof mutationInput>;
+export type AgentGameCommand = z.infer<typeof agentGameCommandSchema>;
 export type MutableGameState = Omit<
 	GameStateRow,
 	"producers" | "goldenUpgrades"
@@ -161,11 +209,11 @@ const addCans = (state: MutableGameState, amount: number): MutableGameState => {
 	};
 };
 
-export const accrueState = (
+const accrueStateWithResult = (
 	state: MutableGameState,
 	pendingManualClicks: number,
 	now: Date
-): MutableGameState => {
+): { acceptedClicks: number; state: MutableGameState } => {
 	const nowMs = now.getTime();
 	const previousMs = state.lastAccruedAt.getTime();
 	const elapsedMs = Math.max(0, nowMs - previousMs);
@@ -211,8 +259,15 @@ export const accrueState = (
 		manualClickBudget: remainingBudget,
 		nextFrenzyClick,
 	};
-	return nextState;
+	return { acceptedClicks, state: nextState };
 };
+
+export const accrueState = (
+	state: MutableGameState,
+	pendingManualClicks: number,
+	now: Date
+): MutableGameState =>
+	accrueStateWithResult(state, pendingManualClicks, now).state;
 
 const toSnapshot = (
 	state: MutableGameState,
@@ -239,23 +294,39 @@ const toSnapshot = (
 	totalGoldenCans: state.totalGoldenCans,
 });
 
-const mutateGameState = async (
+interface GameMutationResult {
+	acceptedClicks: number;
+	replayed: boolean;
+	snapshot: GameSnapshot;
+	state: MutableGameState;
+}
+
+const mutateGameStateWithState = async (
 	userId: string,
 	isAnonymous: boolean,
 	input: MutationInput,
 	mutation: GameMutation = (state) => state,
 	reportIdle = false
-): Promise<GameSnapshot> => {
+): Promise<GameMutationResult> => {
 	const current = normalizeState(await ensureGameState(userId));
 	const serverNow = Date.now();
 	const disposition = getMutationDisposition(current, input);
 	if (disposition === "retry") {
-		return toSnapshot(current, isAnonymous, serverNow);
+		return {
+			acceptedClicks: 0,
+			replayed: true,
+			snapshot: toSnapshot(current, isAnonymous, serverNow),
+			state: current,
+		};
 	}
 
 	const now = new Date(serverNow);
-	const accrued = accrueState(current, input.pendingManualClicks, now);
-	const mutated = mutation(accrued, now);
+	const accrual = accrueStateWithResult(
+		current,
+		input.pendingManualClicks,
+		now
+	);
+	const mutated = mutation(accrual.state, now);
 	const [saved] = await db
 		.update(gameState)
 		.set({
@@ -277,22 +348,45 @@ const mutateGameState = async (
 			message: "Game state changed; reloading save",
 		});
 	}
-	const snapshot = toSnapshot(normalizeState(saved), isAnonymous, serverNow);
+	const normalized = normalizeState(saved);
+	let snapshot = toSnapshot(normalized, isAnonymous, serverNow);
 	const idleElapsedMs = serverNow - current.lastAccruedAt.getTime();
-	if (!(reportIdle && idleElapsedMs >= OFFLINE_AFTER_MS)) {
-		return snapshot;
+	if (reportIdle && idleElapsedMs >= OFFLINE_AFTER_MS) {
+		snapshot = {
+			...snapshot,
+			idleReport: {
+				cansEarned: Math.max(0, snapshot.lifetimeCans - current.lifetimeCans),
+				elapsedMs: idleElapsedMs,
+				hadFrenzy:
+					current.frenzyEndsAt !== null &&
+					current.frenzyEndsAt.getTime() > current.lastAccruedAt.getTime(),
+			},
+		};
 	}
 	return {
-		...snapshot,
-		idleReport: {
-			cansEarned: Math.max(0, snapshot.lifetimeCans - current.lifetimeCans),
-			elapsedMs: idleElapsedMs,
-			hadFrenzy:
-				current.frenzyEndsAt !== null &&
-				current.frenzyEndsAt.getTime() > current.lastAccruedAt.getTime(),
-		},
+		acceptedClicks: accrual.acceptedClicks,
+		replayed: false,
+		snapshot,
+		state: normalized,
 	};
 };
+
+const mutateGameState = async (
+	userId: string,
+	isAnonymous: boolean,
+	input: MutationInput,
+	mutation: GameMutation = (state) => state,
+	reportIdle = false
+): Promise<GameSnapshot> =>
+	(
+		await mutateGameStateWithState(
+			userId,
+			isAnonymous,
+			input,
+			mutation,
+			reportIdle
+		)
+	).snapshot;
 
 export const getMutationDisposition = (
 	state: Pick<MutableGameState, "lastOperationId" | "revision">,
@@ -351,6 +445,46 @@ export const buyProducer = (producerId: string): GameMutation => {
 				[producerId]: state.producers[producerId] + 1,
 			},
 		};
+	};
+};
+
+export const advanceOpenState = (
+	state: MutableGameState,
+	milliseconds: number,
+	now: Date
+): MutableGameState => {
+	let nextState = state;
+	let remainingMs = milliseconds;
+	let simulatedNow = now.getTime();
+
+	while (remainingMs >= AGENT_HEARTBEAT_MS) {
+		simulatedNow += AGENT_HEARTBEAT_MS;
+		nextState = accrueState(nextState, 0, new Date(simulatedNow));
+		if (nextState.goldenUpgrades["smart-stocker"] > 0) {
+			const producerId = cheapestAffordableProducer(nextState, nextState.cans);
+			if (producerId) {
+				nextState = buyProducer(producerId)(nextState, new Date(simulatedNow));
+			}
+		}
+		remainingMs -= AGENT_HEARTBEAT_MS;
+	}
+
+	if (remainingMs > 0) {
+		simulatedNow += remainingMs;
+		nextState = accrueState(nextState, 0, new Date(simulatedNow));
+	}
+
+	const frenzyRemainingMs = Math.max(
+		0,
+		(nextState.frenzyEndsAt?.getTime() ?? 0) - simulatedNow
+	);
+	return {
+		...nextState,
+		frenzyEndsAt:
+			frenzyRemainingMs > 0
+				? new Date(now.getTime() + frenzyRemainingMs)
+				: null,
+		lastAccruedAt: now,
 	};
 };
 
@@ -444,6 +578,16 @@ export const prestige: GameMutation = (state) => {
 		totalGoldenCans: state.totalGoldenCans + reward,
 	};
 };
+
+export const resetGameState = (
+	state: MutableGameState,
+	now: Date
+): MutableGameState => ({
+	...createDefaultGameState(state.userId, now),
+	createdAt: state.createdAt,
+	revision: state.revision,
+	shadowBanned: state.shadowBanned,
+});
 
 const sessionIsAnonymous = (session: {
 	user: { isAnonymous?: boolean | null };
@@ -549,40 +693,264 @@ export const leaderboardForViewer = (
 		? rankLeaderboard([...publicRows, viewer])
 		: rankLeaderboard(publicRows);
 
-export const leaderboardRouter = router({
-	list: protectedProcedure.query(async ({ ctx }) => {
-		const publicRows = await db
-			.select({
-				createdAt: user.createdAt,
-				lifetimeCans: gameState.lifetimeCans,
-				name: user.name,
-				prestigeLevel: gameState.prestigeLevel,
-				userId: user.id,
-			})
-			.from(gameState)
-			.innerJoin(user, eq(gameState.userId, user.id))
-			.where(
-				and(eq(gameState.shadowBanned, false), eq(user.isAnonymous, false))
-			)
-			.orderBy(desc(gameState.lifetimeCans), asc(user.createdAt))
-			.limit(50);
+const getLeaderboard = async (userId: string, isAnonymous: boolean) => {
+	const publicRows = await db
+		.select({
+			createdAt: user.createdAt,
+			lifetimeCans: gameState.lifetimeCans,
+			name: user.name,
+			prestigeLevel: gameState.prestigeLevel,
+			userId: user.id,
+		})
+		.from(gameState)
+		.innerJoin(user, eq(gameState.userId, user.id))
+		.where(and(eq(gameState.shadowBanned, false), eq(user.isAnonymous, false)))
+		.orderBy(desc(gameState.lifetimeCans), asc(user.createdAt))
+		.limit(50);
 
-		if (sessionIsAnonymous(ctx.session)) {
-			return rankLeaderboard(publicRows);
-		}
-		const [viewer] = await db
-			.select({
-				createdAt: user.createdAt,
-				lifetimeCans: gameState.lifetimeCans,
-				name: user.name,
-				prestigeLevel: gameState.prestigeLevel,
-				shadowBanned: gameState.shadowBanned,
-				userId: user.id,
-			})
-			.from(gameState)
-			.innerJoin(user, eq(gameState.userId, user.id))
-			.where(eq(gameState.userId, ctx.session.user.id))
-			.limit(1);
-		return leaderboardForViewer(publicRows, viewer);
-	}),
+	if (isAnonymous) {
+		return rankLeaderboard(publicRows);
+	}
+	const [viewer] = await db
+		.select({
+			createdAt: user.createdAt,
+			lifetimeCans: gameState.lifetimeCans,
+			name: user.name,
+			prestigeLevel: gameState.prestigeLevel,
+			shadowBanned: gameState.shadowBanned,
+			userId: user.id,
+		})
+		.from(gameState)
+		.innerJoin(user, eq(gameState.userId, user.id))
+		.where(eq(gameState.userId, userId))
+		.limit(1);
+	return leaderboardForViewer(publicRows, viewer);
+};
+
+export const leaderboardRouter = router({
+	list: protectedProcedure.query(({ ctx }) =>
+		getLeaderboard(ctx.session.user.id, sessionIsAnonymous(ctx.session))
+	),
 });
+
+export interface AgentGameActionResult {
+	acceptedClicks?: number;
+	action: AgentGameCommand["action"];
+	advancedMilliseconds?: number;
+	producerId?: string;
+	rejectedClicks?: number;
+	replayed: boolean;
+	upgradeId?: string;
+}
+
+export const createAgentGameObservation = (
+	state: MutableGameState,
+	snapshot: GameSnapshot,
+	leaderboard: ReturnType<typeof rankLeaderboard>,
+	result: AgentGameActionResult
+) => {
+	const frenzyActive = (snapshot.frenzyEndsAt ?? 0) > snapshot.serverNow;
+	const clickValue = calculateClickValue(state);
+	const manualClicksAvailable = Math.floor(state.manualClickBudget);
+	const requirement = prestigeRequirement(state.totalGoldenCans);
+	const reward = prestigeReward(state.runCans, state.totalGoldenCans);
+	const producers = PRODUCERS.map((producer) => {
+		const owned = state.producers[producer.id];
+		const cost = producerCost(producer.id, owned);
+		return {
+			affordable: state.cans >= cost,
+			baseCps: producer.baseCps,
+			cost,
+			id: producer.id,
+			name: producer.name,
+			owned,
+		};
+	});
+	const runUpgrades = RUN_UPGRADES.map((upgrade) => {
+		const producerOwned = upgrade.producerId
+			? state.producers[upgrade.producerId]
+			: 0;
+		const owned = state.runUpgrades.includes(upgrade.id);
+		const unlocked =
+			upgrade.requiredOwned === undefined ||
+			producerOwned >= upgrade.requiredOwned;
+		return {
+			affordable: !owned && unlocked && state.cans >= upgrade.cost,
+			cost: upgrade.cost,
+			description: upgrade.description,
+			id: upgrade.id,
+			name: upgrade.name,
+			owned,
+			producerId: upgrade.producerId ?? null,
+			requiredOwned: upgrade.requiredOwned ?? null,
+			unlocked,
+		};
+	});
+	const goldenUpgrades = GOLDEN_UPGRADES.map((upgrade) => {
+		const rank = state.goldenUpgrades[upgrade.id];
+		const cost = goldenUpgradeCost(upgrade.id, rank);
+		const maxed = rank >= upgrade.maxRank;
+		const unlocked = state.prestigeLevel >= upgrade.unlockLevel;
+		return {
+			affordable: !maxed && unlocked && state.goldenCans >= cost,
+			cost,
+			description: upgrade.description,
+			id: upgrade.id,
+			maxed,
+			maxRank: upgrade.maxRank,
+			name: upgrade.name,
+			rank,
+			unlocked,
+			unlockLevel: upgrade.unlockLevel,
+		};
+	});
+	const legalActions: AgentGameCommand[] = [{ action: "observe" }];
+	if (manualClicksAvailable > 0) {
+		legalActions.push({
+			action: "click",
+			count: manualClicksAvailable,
+			operationId: crypto.randomUUID(),
+		});
+	}
+	legalActions.push({
+		action: "wait",
+		milliseconds: AGENT_HEARTBEAT_MS,
+		operationId: crypto.randomUUID(),
+	});
+	for (const producer of producers) {
+		if (producer.affordable) {
+			legalActions.push({
+				action: "buy_producer",
+				operationId: crypto.randomUUID(),
+				producerId: producer.id,
+			});
+		}
+	}
+	for (const upgrade of [...runUpgrades, ...goldenUpgrades]) {
+		if (upgrade.affordable) {
+			legalActions.push({
+				action: "buy_upgrade",
+				operationId: crypto.randomUUID(),
+				upgradeId: upgrade.id,
+			});
+		}
+	}
+	if (state.runCans >= requirement && reward > 0) {
+		legalActions.push({
+			action: "prestige",
+			operationId: crypto.randomUUID(),
+		});
+	}
+	legalActions.push({
+		action: "reset",
+		confirm: "RESET",
+		operationId: crypto.randomUUID(),
+	});
+
+	return {
+		leaderboard: leaderboard.slice(0, 10),
+		legalActions,
+		result,
+		shop: { goldenUpgrades, producers, runUpgrades },
+		state: snapshot,
+		stats: {
+			baseClickValue: clickValue,
+			cansPerSecond: calculateCps(state),
+			effectiveClickValue: clickValue * (frenzyActive ? FRENZY_MULTIPLIER : 1),
+			frenzy: {
+				active: frenzyActive,
+				clicksUntilNext: state.nextFrenzyClick,
+				multiplier: frenzyActive ? FRENZY_MULTIPLIER : 1,
+				remainingMilliseconds: frenzyActive
+					? Math.max(0, (snapshot.frenzyEndsAt ?? 0) - snapshot.serverNow)
+					: 0,
+			},
+			manualClicksAvailable,
+			prestige: {
+				ready: state.runCans >= requirement && reward > 0,
+				requirement,
+				reward,
+			},
+		},
+	};
+};
+
+const mutationForAgentCommand = (command: AgentGameCommand): GameMutation => {
+	if (command.action === "buy_producer") {
+		return buyProducer(command.producerId);
+	}
+	if (command.action === "buy_upgrade") {
+		return buyUpgrade(command.upgradeId);
+	}
+	if (command.action === "wait") {
+		return (state, now) => advanceOpenState(state, command.milliseconds, now);
+	}
+	if (command.action === "prestige") {
+		return prestige;
+	}
+	if (command.action === "reset") {
+		return resetGameState;
+	}
+	return (state) => state;
+};
+
+const resultForAgentCommand = (
+	command: AgentGameCommand,
+	mutationResult: GameMutationResult
+): AgentGameActionResult => {
+	const base = {
+		action: command.action,
+		replayed: mutationResult.replayed,
+	};
+	if (command.action === "click") {
+		return mutationResult.replayed
+			? base
+			: {
+					...base,
+					acceptedClicks: mutationResult.acceptedClicks,
+					rejectedClicks: command.count - mutationResult.acceptedClicks,
+				};
+	}
+	if (command.action === "wait") {
+		return {
+			...base,
+			advancedMilliseconds: mutationResult.replayed ? 0 : command.milliseconds,
+		};
+	}
+	if (command.action === "buy_producer") {
+		return { ...base, producerId: command.producerId };
+	}
+	if (command.action === "buy_upgrade") {
+		return { ...base, upgradeId: command.upgradeId };
+	}
+	return base;
+};
+
+export const runAgentGameCommand = async (
+	userId: string,
+	isAnonymous: boolean,
+	command: AgentGameCommand
+) => {
+	const current = await ensureGameState(userId);
+	const mutationResult = await mutateGameStateWithState(
+		userId,
+		isAnonymous,
+		{
+			operationId:
+				command.action === "observe"
+					? crypto.randomUUID()
+					: command.operationId,
+			pendingManualClicks: command.action === "click" ? command.count : 0,
+			revision: current.revision,
+		},
+		mutationForAgentCommand(command),
+		command.action === "observe"
+	);
+	const leaderboard = await getLeaderboard(userId, isAnonymous);
+	return createAgentGameObservation(
+		mutationResult.state,
+		mutationResult.snapshot,
+		leaderboard,
+		resultForAgentCommand(command, mutationResult)
+	);
+};
