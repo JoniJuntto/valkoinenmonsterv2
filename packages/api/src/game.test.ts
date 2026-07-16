@@ -57,6 +57,14 @@ describe("Monster game economy", () => {
 		progress.goldenUpgrades["golden-reactor"] = 1;
 		expect(calculateClickValue(progress)).toBe(300);
 		expect(calculateCps(progress)).toBe(613);
+		progress.runUpgrades.push(
+			"titanium-tab",
+			"golden-knuckle",
+			"diamond-fist",
+			"plasma-punch",
+			"singularity-touch"
+		);
+		expect(calculateClickValue(progress)).toBe(30_000_000);
 	});
 
 	test("calculates prestige and golden upgrade costs", () => {

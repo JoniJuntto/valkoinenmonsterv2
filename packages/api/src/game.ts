@@ -70,6 +70,24 @@ export const CLICK_UPGRADES = [
 		id: "golden-knuckle",
 		name: "Golden Knuckle",
 	},
+	{
+		cost: 2_500_000_000,
+		description: "10× cans per click",
+		id: "diamond-fist",
+		name: "Diamond Fist",
+	},
+	{
+		cost: 250_000_000_000,
+		description: "10× cans per click",
+		id: "plasma-punch",
+		name: "Plasma Punch",
+	},
+	{
+		cost: 25_000_000_000_000,
+		description: "10× cans per click",
+		id: "singularity-touch",
+		name: "Singularity Touch",
+	},
 ] as const;
 
 const MILESTONES = [25, 50] as const;
