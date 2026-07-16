@@ -205,6 +205,9 @@ const StatsCard = ({
 	isSaving,
 	onPrestige,
 }: StatsCardProps) => {
+	const clickValue =
+		calculateClickValue(game) *
+		((game.frenzyEndsAt ?? 0) > game.serverNow ? FRENZY_MULTIPLIER : 1);
 	const requirement = prestigeRequirement(game.totalGoldenCans);
 	const reward = prestigeReward(game.runCans, game.totalGoldenCans);
 	return (
@@ -222,13 +225,13 @@ const StatsCard = ({
 					<div className="flex items-baseline justify-between gap-2 border-foreground/20 border-b py-1.5">
 						<dt className="font-bold">Per click</dt>
 						<dd className="font-bold tabular-nums">
-							{formatGameNumber(calculateClickValue(game))}
+							{formatGameNumber(clickValue)}
 						</dd>
 					</div>
 					<div className="flex items-baseline justify-between gap-2 border-foreground/20 border-b py-1.5">
 						<dt className="font-bold">Click CPS</dt>
 						<dd className="font-bold tabular-nums">
-							{formatGameNumber(clicksPerSecond * calculateClickValue(game))}
+							{formatGameNumber(clicksPerSecond * clickValue)}
 						</dd>
 					</div>
 					<div className="flex items-baseline justify-between gap-2 border-foreground border-b-4 py-1.5">
@@ -463,6 +466,9 @@ const ShopCard = ({
 							const producerOwned = upgrade.producerId
 								? game.producers[upgrade.producerId]
 								: 0;
+							const producerName = upgrade.producerId
+								? PRODUCERS.find(({ id }) => id === upgrade.producerId)?.name
+								: undefined;
 							const isOwned = game.runUpgrades.includes(upgrade.id);
 							const isUnlocked =
 								upgrade.requiredOwned === undefined ||
@@ -477,7 +483,7 @@ const ShopCard = ({
 										<p className="text-muted-foreground">
 											{isUnlocked
 												? upgrade.description
-												: `Requires ${upgrade.requiredOwned} owned`}
+												: `Own ${upgrade.requiredOwned}× ${producerName} — buy them under Producers above`}
 										</p>
 									</div>
 									<Button
