@@ -55,8 +55,8 @@ describe("Monster game economy", () => {
 		progress.goldenUpgrades["endless-chill"] = 2;
 		progress.goldenUpgrades["auto-tapper"] = 2;
 		progress.goldenUpgrades["golden-reactor"] = 1;
-		expect(calculateClickValue(progress)).toBe(12);
-		expect(calculateCps(progress)).toBe(37);
+		expect(calculateClickValue(progress)).toBe(300);
+		expect(calculateCps(progress)).toBe(613);
 	});
 
 	test("calculates prestige and golden upgrade costs", () => {

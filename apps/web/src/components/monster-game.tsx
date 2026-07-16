@@ -180,6 +180,7 @@ const GameLoading = () => (
 );
 
 interface StatsCardProps {
+	clicksPerSecond: number;
 	game: GameSnapshot;
 	isSaving: boolean;
 	onPrestige: () => void;
@@ -198,7 +199,12 @@ const NUTRITION_ROWS: {
 	{ label: "Golden cans", value: (game) => String(game.goldenCans) },
 ];
 
-const StatsCard = ({ game, isSaving, onPrestige }: StatsCardProps) => {
+const StatsCard = ({
+	clicksPerSecond,
+	game,
+	isSaving,
+	onPrestige,
+}: StatsCardProps) => {
 	const requirement = prestigeRequirement(game.totalGoldenCans);
 	const reward = prestigeReward(game.runCans, game.totalGoldenCans);
 	return (
@@ -217,6 +223,12 @@ const StatsCard = ({ game, isSaving, onPrestige }: StatsCardProps) => {
 						<dt className="font-bold">Per click</dt>
 						<dd className="font-bold tabular-nums">
 							{formatGameNumber(calculateClickValue(game))}
+						</dd>
+					</div>
+					<div className="flex items-baseline justify-between gap-2 border-foreground/20 border-b py-1.5">
+						<dt className="font-bold">Click CPS</dt>
+						<dd className="font-bold tabular-nums">
+							{formatGameNumber(clicksPerSecond * calculateClickValue(game))}
 						</dd>
 					</div>
 					<div className="flex items-baseline justify-between gap-2 border-foreground border-b-4 py-1.5">
@@ -643,6 +655,8 @@ export const MonsterGame = () => {
 	const mutationLockedRef = useRef(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [clickLabels, setClickLabels] = useState<ClickLabel[]>([]);
+	const [clicksPerSecond, setClicksPerSecond] = useState(0);
+	const clickTimesRef = useRef<number[]>([]);
 	const clickLabelIdRef = useRef(0);
 	const clickLabelTimeoutsRef = useRef(new Set<number>());
 	const [isMuted, setIsMuted] = useState(() =>
@@ -797,7 +811,12 @@ export const MonsterGame = () => {
 
 	useEffect(() => {
 		const timer = window.setInterval(() => {
-			updateGame((current) => projectElapsed(current, Date.now()));
+			const now = Date.now();
+			clickTimesRef.current = clickTimesRef.current.filter(
+				(clickedAt) => clickedAt > now - 1000
+			);
+			setClicksPerSecond(clickTimesRef.current.length);
+			updateGame((current) => projectElapsed(current, now));
 		}, DISPLAY_TICK_MS);
 		return () => window.clearInterval(timer);
 	}, [updateGame]);
@@ -1082,6 +1101,8 @@ export const MonsterGame = () => {
 		totalClicksRef.current += 1;
 		const milestone = getClickMilestone(totalClicksRef.current);
 		const now = Date.now();
+		clickTimesRef.current.push(now);
+		setClicksPerSecond(clickTimesRef.current.length);
 		const frenzyActive = (current.frenzyEndsAt ?? 0) > now;
 		const amount =
 			calculateClickValue(current) * (frenzyActive ? FRENZY_MULTIPLIER : 1);
@@ -1179,7 +1200,12 @@ export const MonsterGame = () => {
 				isFrenzyActive && "is-frenzy"
 			)}
 		>
-			<StatsCard game={game} isSaving={isSaving} onPrestige={confirmPrestige} />
+			<StatsCard
+				clicksPerSecond={clicksPerSecond}
+				game={game}
+				isSaving={isSaving}
+				onPrestige={confirmPrestige}
+			/>
 			<CanCard
 				clickLabels={clickLabels}
 				game={game}

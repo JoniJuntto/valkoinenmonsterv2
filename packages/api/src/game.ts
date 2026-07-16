@@ -48,25 +48,25 @@ export type ProducerCounts = Record<ProducerId, number>;
 export const CLICK_UPGRADES = [
 	{
 		cost: 100,
-		description: "Double cans per click",
+		description: "10× cans per click",
 		id: "cold-can",
 		name: "Cold Can",
 	},
 	{
 		cost: 5000,
-		description: "Double cans per click",
+		description: "10× cans per click",
 		id: "firm-grip",
 		name: "Firm Grip",
 	},
 	{
 		cost: 250_000,
-		description: "Double cans per click",
+		description: "10× cans per click",
 		id: "titanium-tab",
 		name: "Titanium Tab",
 	},
 	{
 		cost: 25_000_000,
-		description: "Double cans per click",
+		description: "10× cans per click",
 		id: "golden-knuckle",
 		name: "Golden Knuckle",
 	},
@@ -318,7 +318,7 @@ export const calculateClickValue = (progress: GameProgress): number => {
 	let clickMultiplier = 1;
 	for (const upgrade of CLICK_UPGRADES) {
 		if (hasRunUpgrade(progress, upgrade.id)) {
-			clickMultiplier *= 2;
+			clickMultiplier *= 10;
 		}
 	}
 	clickMultiplier *= 1 + progress.goldenUpgrades["golden-grip"] * 0.25;
