@@ -53,3 +53,5 @@ coverage
 .cache
 tmp
 temp
+*.md
+!README.md
