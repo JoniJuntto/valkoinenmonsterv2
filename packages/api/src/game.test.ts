@@ -58,13 +58,15 @@ describe("Monster game economy", () => {
 		expect(calculateClickValue(progress)).toBe(300);
 		expect(calculateCps(progress)).toBe(613);
 		progress.runUpgrades.push(
+			"steel-finger",
 			"titanium-tab",
 			"golden-knuckle",
+			"platinum-palm",
 			"diamond-fist",
 			"plasma-punch",
 			"singularity-touch"
 		);
-		expect(calculateClickValue(progress)).toBe(30_000_000);
+		expect(calculateClickValue(progress)).toBe(3_000_000_000);
 	});
 
 	test("calculates prestige and golden upgrade costs", () => {

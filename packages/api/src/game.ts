@@ -59,6 +59,12 @@ export const CLICK_UPGRADES = [
 		name: "Firm Grip",
 	},
 	{
+		cost: 50_000,
+		description: "10× cans per click",
+		id: "steel-finger",
+		name: "Steel Finger",
+	},
+	{
 		cost: 250_000,
 		description: "10× cans per click",
 		id: "titanium-tab",
@@ -69,6 +75,12 @@ export const CLICK_UPGRADES = [
 		description: "10× cans per click",
 		id: "golden-knuckle",
 		name: "Golden Knuckle",
+	},
+	{
+		cost: 250_000_000,
+		description: "10× cans per click",
+		id: "platinum-palm",
+		name: "Platinum Palm",
 	},
 	{
 		cost: 2_500_000_000,
