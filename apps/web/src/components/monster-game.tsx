@@ -9,16 +9,19 @@ import {
 	FRENZY_MULTIPLIER,
 	formatGameNumber,
 	type GameSnapshot,
+	GOLDEN_CAN_BASE,
 	GOLDEN_UPGRADES,
 	goldenUpgradeCost,
 	isGoldenUpgradeId,
+	nextGoldenCanRequirement,
 	OFFLINE_PRODUCTION_MULTIPLIER,
 	PRODUCERS,
 	type ProducerId,
-	prestigeRequirement,
 	prestigeReward,
 	producerCost,
 	RUN_UPGRADES,
+	type RunUpgradeDefinition,
+	type RunUpgradeKind,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -170,6 +173,44 @@ const projectPendingClicks = (
 	return projected;
 };
 
+const UPGRADES_SHOWN_PER_FAMILY = 2;
+const runUpgradesByCost = [...RUN_UPGRADES].sort(
+	(left, right) => left.cost - right.cost
+);
+
+const selectVisibleRunUpgrades = (
+	game: GameSnapshot
+): RunUpgradeDefinition[] => {
+	const visible: RunUpgradeDefinition[] = [];
+	const shownPerFamily: Partial<Record<RunUpgradeKind, number>> = {};
+	const producersWithMilestone = new Set<ProducerId>();
+	for (const upgrade of runUpgradesByCost) {
+		if (game.runUpgrades.includes(upgrade.id)) {
+			continue;
+		}
+		if (upgrade.kind === "milestone") {
+			const { producerId } = upgrade;
+			if (
+				!producerId ||
+				game.producers[producerId] < 1 ||
+				producersWithMilestone.has(producerId)
+			) {
+				continue;
+			}
+			producersWithMilestone.add(producerId);
+			visible.push(upgrade);
+			continue;
+		}
+		const shown = shownPerFamily[upgrade.kind] ?? 0;
+		if (shown >= UPGRADES_SHOWN_PER_FAMILY) {
+			continue;
+		}
+		shownPerFamily[upgrade.kind] = shown + 1;
+		visible.push(upgrade);
+	}
+	return visible;
+};
+
 const GameLoading = () => (
 	<main className="grid gap-4 px-4 pb-8 md:grid-cols-3">
 		{["stats", "can", "shop"].map((name) => (
@@ -215,8 +256,10 @@ const StatsCard = ({
 	const clickValue =
 		calculateClickValue(game) *
 		((game.frenzyEndsAt ?? 0) > game.serverNow ? FRENZY_MULTIPLIER : 1);
-	const requirement = prestigeRequirement(game.prestigeLevel);
-	const reward = prestigeReward(game.runCans, game.prestigeLevel);
+	const reward = prestigeReward(game.lifetimeCans, game.totalGoldenCans);
+	const nextRequirement = nextGoldenCanRequirement(game.totalGoldenCans);
+	const previousRequirement =
+		game.totalGoldenCans > 0 ? GOLDEN_CAN_BASE * game.totalGoldenCans ** 2 : 0;
 	return (
 		<Card className="order-2 gap-0 self-start py-0 ring-foreground xl:col-start-1 xl:row-start-1">
 			<div className="p-(--card-spacing) pb-3">
@@ -259,26 +302,29 @@ const StatsCard = ({
 				</dl>
 				<div className="mt-1 border-foreground border-t-8 pt-2">
 					<div className="flex justify-between gap-2">
-						<span>Next prestige</span>
-						<span className="tabular-nums">+{reward} golden</span>
+						<span>{reward >= 1 ? "Prestige ready" : "Next golden can"}</span>
+						<span className="tabular-nums">+{Math.max(reward, 1)} golden</span>
 					</div>
 					<progress
-						aria-label="Progress toward prestige"
+						aria-label="Progress toward the next golden can"
 						className="monster-progress mt-2 w-full"
-						max={requirement}
-						value={Math.min(game.runCans, requirement)}
+						max={nextRequirement - previousRequirement}
+						value={Math.max(
+							0,
+							Math.min(game.lifetimeCans, nextRequirement) - previousRequirement
+						)}
 					/>
 					<p className="mt-2 text-muted-foreground">
-						* {formatGameNumber(game.runCans)} / {formatGameNumber(requirement)}{" "}
-						run cans. Prestige resets the run; golden cans and permanent
-						upgrades stay.
+						* {formatGameNumber(game.lifetimeCans)} /{" "}
+						{formatGameNumber(nextRequirement)} lifetime cans. Prestige resets
+						the run; golden cans and permanent upgrades stay.
 					</p>
 				</div>
 			</div>
 			<CardFooter>
 				<Button
 					className="w-full"
-					disabled={isSaving || game.runCans < requirement}
+					disabled={isSaving || reward < 1}
 					onClick={onPrestige}
 				>
 					Prestige for {reward} golden cans
@@ -483,14 +529,13 @@ const ShopCard = ({
 						Run upgrades
 					</h2>
 					<ul className="flex flex-col gap-2">
-						{RUN_UPGRADES.map((upgrade) => {
+						{selectVisibleRunUpgrades(game).map((upgrade) => {
 							const producerOwned = upgrade.producerId
 								? game.producers[upgrade.producerId]
 								: 0;
 							const producerName = upgrade.producerId
 								? PRODUCERS.find(({ id }) => id === upgrade.producerId)?.name
 								: undefined;
-							const isOwned = game.runUpgrades.includes(upgrade.id);
 							const isUnlocked =
 								upgrade.requiredOwned === undefined ||
 								producerOwned >= upgrade.requiredOwned;
@@ -510,20 +555,17 @@ const ShopCard = ({
 									<Button
 										data-upgrade-id={upgrade.id}
 										disabled={
-											isSaving ||
-											isOwned ||
-											!isUnlocked ||
-											game.cans < upgrade.cost
+											isSaving || !isUnlocked || game.cans < upgrade.cost
 										}
 										onClick={handleUpgradeClick}
 										size="sm"
 										variant={
-											!isOwned && isUnlocked && game.cans >= upgrade.cost
+											isUnlocked && game.cans >= upgrade.cost
 												? "default"
 												: "outline"
 										}
 									>
-										{isOwned ? "Owned" : formatGameNumber(upgrade.cost)}
+										{formatGameNumber(upgrade.cost)}
 									</Button>
 								</li>
 							);
@@ -790,12 +832,12 @@ export const MonsterGame = () => {
 		if (!game) {
 			return;
 		}
-		const requirement = prestigeRequirement(game.prestigeLevel);
-		if (game.runCans >= requirement && !prestigeReadyTrackedRef.current) {
+		const reward = prestigeReward(game.lifetimeCans, game.totalGoldenCans);
+		if (reward >= 1 && !prestigeReadyTrackedRef.current) {
 			prestigeReadyTrackedRef.current = true;
 			track(AnalyticsEvents.game.prestigeReady, {
 				prestige_level: game.prestigeLevel,
-				reward_golden_cans: prestigeReward(game.runCans, game.prestigeLevel),
+				reward_golden_cans: reward,
 				run_cans_bucket: bucketCans(game.runCans),
 			});
 		}
@@ -972,8 +1014,8 @@ export const MonsterGame = () => {
 						track(AnalyticsEvents.game.prestigeConfirmed, {
 							prestige_level: before.prestigeLevel,
 							reward_golden_cans: prestigeReward(
-								before.runCans,
-								before.prestigeLevel
+								before.lifetimeCans,
+								before.totalGoldenCans
 							),
 							run_cans_bucket: bucketCans(before.runCans),
 						});
@@ -1184,7 +1226,10 @@ export const MonsterGame = () => {
 		if (!current) {
 			return;
 		}
-		const reward = prestigeReward(current.runCans, current.prestigeLevel);
+		const reward = prestigeReward(
+			current.lifetimeCans,
+			current.totalGoldenCans
+		);
 		// biome-ignore lint/suspicious/noAlert: The agreed game flow uses the browser's native confirmation.
 		const confirmed = window.confirm(
 			`Reset this run for ${reward} golden cans? Permanent upgrades and lifetime cans stay.`

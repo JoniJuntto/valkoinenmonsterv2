@@ -32,10 +32,10 @@ import {
 	isGoldenUpgradeId,
 	isProducerId,
 	isRunUpgradeId,
+	nextGoldenCanRequirement,
 	OFFLINE_PRODUCTION_MULTIPLIER,
 	PRODUCERS,
 	type ProducerCounts,
-	prestigeRequirement,
 	prestigeReward,
 	producerCost,
 	RUN_UPGRADES,
@@ -149,6 +149,7 @@ export const createDefaultGameState = (userId: string, now: Date) => {
 		goldenUpgrades: createInitialGoldenUpgrades(),
 		producers: createInitialProducers(),
 		runUpgrades: [],
+		totalGoldenCans: 0,
 	};
 	return {
 		bestRunCans: 0,
@@ -157,7 +158,6 @@ export const createDefaultGameState = (userId: string, now: Date) => {
 		lifetimeCans: 0,
 		prestigeLevel: 0,
 		runCans: 0,
-		totalGoldenCans: 0,
 		userId,
 		...progress,
 		createdAt: now,
@@ -552,9 +552,8 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 };
 
 export const prestige: GameMutation = (state) => {
-	const requirement = prestigeRequirement(state.prestigeLevel);
-	const reward = prestigeReward(state.runCans, state.prestigeLevel);
-	if (state.runCans < requirement || reward < 1) {
+	const reward = prestigeReward(state.lifetimeCans, state.totalGoldenCans);
+	if (reward < 1) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Prestige is not ready",
@@ -564,6 +563,7 @@ export const prestige: GameMutation = (state) => {
 		goldenUpgrades: state.goldenUpgrades,
 		producers: createInitialProducers(),
 		runUpgrades: [],
+		totalGoldenCans: state.totalGoldenCans + reward,
 	};
 	return {
 		...state,
@@ -575,7 +575,6 @@ export const prestige: GameMutation = (state) => {
 		nextFrenzyClick: randomFrenzyThreshold(nextProgress, secureRandom()),
 		prestigeLevel: state.prestigeLevel + 1,
 		runCans: 0,
-		totalGoldenCans: state.totalGoldenCans + reward,
 	};
 };
 
@@ -621,8 +620,11 @@ export const gameRouter = router({
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
 			const before = normalizeState(await ensureGameState(ctx.session.user.id));
-			const requirement = prestigeRequirement(before.prestigeLevel);
-			const reward = prestigeReward(before.runCans, before.prestigeLevel);
+			const requirement = nextGoldenCanRequirement(before.totalGoldenCans);
+			const reward = prestigeReward(
+				before.lifetimeCans,
+				before.totalGoldenCans
+			);
 			const snapshot = await mutateGameState(
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
@@ -752,8 +754,8 @@ export const createAgentGameObservation = (
 	const frenzyActive = (snapshot.frenzyEndsAt ?? 0) > snapshot.serverNow;
 	const clickValue = calculateClickValue(state);
 	const manualClicksAvailable = Math.floor(state.manualClickBudget);
-	const requirement = prestigeRequirement(state.prestigeLevel);
-	const reward = prestigeReward(state.runCans, state.prestigeLevel);
+	const requirement = nextGoldenCanRequirement(state.totalGoldenCans);
+	const reward = prestigeReward(state.lifetimeCans, state.totalGoldenCans);
 	const producers = PRODUCERS.map((producer) => {
 		const owned = state.producers[producer.id];
 		const cost = producerCost(producer.id, owned);
@@ -835,7 +837,7 @@ export const createAgentGameObservation = (
 			});
 		}
 	}
-	if (state.runCans >= requirement && reward > 0) {
+	if (reward > 0) {
 		legalActions.push({
 			action: "prestige",
 			operationId: crypto.randomUUID(),
@@ -867,7 +869,7 @@ export const createAgentGameObservation = (
 			},
 			manualClicksAvailable,
 			prestige: {
-				ready: state.runCans >= requirement && reward > 0,
+				ready: reward > 0,
 				requirement,
 				reward,
 			},

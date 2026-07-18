@@ -71,7 +71,7 @@ describe("server-authoritative mutations", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.cans = 120_000;
 		state.runCans = 400_000;
-		state.lifetimeCans = 500_000;
+		state.lifetimeCans = 4_000_000;
 		state.producers["mini-fridge"] = 4;
 		state.runUpgrades.push("cold-can");
 		state.goldenUpgrades["golden-grip"] = 2;
@@ -80,20 +80,21 @@ describe("server-authoritative mutations", () => {
 		expect(reset.runCans).toBe(0);
 		expect(reset.producers["mini-fridge"]).toBe(0);
 		expect(reset.runUpgrades).toEqual([]);
-		expect(reset.lifetimeCans).toBe(500_000);
+		expect(reset.lifetimeCans).toBe(4_000_000);
 		expect(reset.goldenUpgrades["golden-grip"]).toBe(2);
 		expect(reset.goldenCans).toBe(2);
+		expect(reset.totalGoldenCans).toBe(2);
 		expect(reset.prestigeLevel).toBe(1);
 	});
 
-	test("increases the prestige requirement after each reset", () => {
+	test("only awards golden cans past the next square-root threshold", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.prestigeLevel = 1;
 		state.totalGoldenCans = 2;
-		state.runCans = 100_000;
+		state.lifetimeCans = 8_999_999;
 		expect(() => prestige(state, new Date(0))).toThrow("Prestige is not ready");
 
-		state.runCans = 200_000;
+		state.lifetimeCans = 9_000_000;
 		const reset = prestige(state, new Date(0));
 		expect(reset.goldenCans).toBe(1);
 		expect(reset.prestigeLevel).toBe(2);
