@@ -1,0 +1,67 @@
+name: Deploy release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy web and server
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy release
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Unsupported release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes root@"$DEPLOY_HOST" "bash -s -- '$RELEASE_TAG'" <<'DEPLOY'
+          set -euo pipefail
+
+          release_tag=$1
+          cd /opt/valkoinenmonsterv2
+
+          test -z "$(git status --porcelain)" || { echo "Production checkout has local changes" >&2; exit 1; }
+          git fetch origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
+          git merge --ff-only "refs/tags/${release_tag}^{commit}"
+          /root/.bun/bin/bun ci
+
+          set -a
+          . /etc/valkoinenmonsterv2/web.env
+          set +a
+          /root/.bun/bin/bun run --cwd apps/web build
+
+          set -a
+          . /etc/valkoinenmonsterv2/api.env
+          set +a
+          /root/.bun/bin/bun run --cwd apps/server build
+          /root/.bun/bin/bun run db:migrate
+
+          systemctl restart valkoinenmonsterv2-api valkoinenmonsterv2-web
+          systemctl is-active --quiet valkoinenmonsterv2-api valkoinenmonsterv2-web
+          curl --retry 5 --retry-connrefused --retry-delay 2 --fail --silent --show-error http://127.0.0.1:6283/ > /dev/null
+          curl --retry 5 --retry-connrefused --retry-delay 2 --fail --silent --show-error --head http://127.0.0.1:39281/ > /dev/null
+          curl --retry 5 --retry-connrefused --retry-delay 2 --fail --silent --show-error --head https://valkoinen.monster/ > /dev/null
+          DEPLOY
