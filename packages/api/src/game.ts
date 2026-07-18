@@ -1,10 +1,13 @@
 export const MAX_GAME_VALUE = 1e300;
 export const FRENZY_MULTIPLIER = 10;
 export const FRENZY_DURATION_MS = 8000;
-export const PRESTIGE_THRESHOLD = 100_000;
+export const GOLDEN_CAN_BASE = 1_000_000;
 export const MANUAL_CLICKS_PER_SECOND = 20;
 export const MAX_MANUAL_CLICK_BUDGET = 120;
 export const OFFLINE_PRODUCTION_MULTIPLIER = 0.1;
+export const CLICK_UPGRADE_MULTIPLIER = 2;
+export const CPS_CLICK_PERCENT = 0.01;
+export const GOLDEN_CAN_PRODUCTION_BONUS = 0.01;
 
 export const PRODUCERS = [
 	{ baseCost: 15, baseCps: 0.1, id: "pull-tab", name: "Pull Tab" },
@@ -40,85 +43,84 @@ export const PRODUCERS = [
 		id: "white-reactor",
 		name: "White Reactor",
 	},
+	{
+		baseCost: 5_100_000_000,
+		baseCps: 260_000,
+		id: "can-portal",
+		name: "Can Portal",
+	},
+	{
+		baseCost: 75_000_000_000,
+		baseCps: 1_600_000,
+		id: "monster-singularity",
+		name: "Monster Singularity",
+	},
 ] as const;
 
 export type ProducerId = (typeof PRODUCERS)[number]["id"];
 export type ProducerCounts = Record<ProducerId, number>;
 
-export const CLICK_UPGRADES = [
-	{
-		cost: 100,
-		description: "10× cans per click",
-		id: "cold-can",
-		name: "Cold Can",
-	},
-	{
-		cost: 5000,
-		description: "10× cans per click",
-		id: "firm-grip",
-		name: "Firm Grip",
-	},
-	{
-		cost: 50_000,
-		description: "10× cans per click",
-		id: "steel-finger",
-		name: "Steel Finger",
-	},
-	{
-		cost: 250_000,
-		description: "10× cans per click",
-		id: "titanium-tab",
-		name: "Titanium Tab",
-	},
-	{
-		cost: 25_000_000,
-		description: "10× cans per click",
-		id: "golden-knuckle",
-		name: "Golden Knuckle",
-	},
-	{
-		cost: 250_000_000,
-		description: "10× cans per click",
-		id: "platinum-palm",
-		name: "Platinum Palm",
-	},
-	{
-		cost: 2_500_000_000,
-		description: "10× cans per click",
-		id: "diamond-fist",
-		name: "Diamond Fist",
-	},
-	{
-		cost: 250_000_000_000,
-		description: "10× cans per click",
-		id: "plasma-punch",
-		name: "Plasma Punch",
-	},
-	{
-		cost: 25_000_000_000_000,
-		description: "10× cans per click",
-		id: "singularity-touch",
-		name: "Singularity Touch",
-	},
-] as const;
-
-const MILESTONES = [25, 50] as const;
+export type RunUpgradeKind = "click" | "cps-click" | "flavor" | "milestone";
 
 export interface RunUpgradeDefinition {
 	cost: number;
 	description: string;
 	id: string;
+	kind: RunUpgradeKind;
 	name: string;
 	producerId?: ProducerId;
 	requiredOwned?: number;
 }
 
+export const CLICK_UPGRADES: RunUpgradeDefinition[] = [
+	{ cost: 100, id: "cold-can", name: "Cold Can" },
+	{ cost: 1000, id: "firm-grip", name: "Firm Grip" },
+	{ cost: 10_000, id: "steel-finger", name: "Steel Finger" },
+	{ cost: 100_000, id: "titanium-tab", name: "Titanium Tab" },
+	{ cost: 1_000_000, id: "golden-knuckle", name: "Golden Knuckle" },
+	{ cost: 10_000_000, id: "platinum-palm", name: "Platinum Palm" },
+	{ cost: 100_000_000, id: "diamond-fist", name: "Diamond Fist" },
+	{ cost: 1_000_000_000, id: "plasma-punch", name: "Plasma Punch" },
+	{ cost: 10_000_000_000, id: "singularity-touch", name: "Singularity Touch" },
+].map((upgrade) => ({
+	...upgrade,
+	description: "2× cans per click",
+	kind: "click",
+}));
+
+export const CPS_CLICK_UPGRADES: RunUpgradeDefinition[] = [
+	{ cost: 50_000_000, id: "sticky-fingers", name: "Sticky Fingers" },
+	{ cost: 5_000_000_000, id: "monster-reflexes", name: "Monster Reflexes" },
+	{ cost: 500_000_000_000, id: "caffeine-overload", name: "Caffeine Overload" },
+].map((upgrade) => ({
+	...upgrade,
+	description: "Clicks also earn +1% of your cans per second",
+	kind: "cps-click",
+}));
+
+export const FLAVOR_UPGRADES: RunUpgradeDefinition[] = [
+	{ cost: 1_000_000, id: "ultra-white", name: "Ultra White" },
+	{ cost: 50_000_000, id: "ultra-blue", name: "Ultra Blue" },
+	{ cost: 2_500_000_000, id: "ultra-rosa", name: "Ultra Rosa" },
+	{ cost: 125_000_000_000, id: "ultra-gold", name: "Ultra Gold" },
+	{ cost: 6_250_000_000_000, id: "ultra-paradise", name: "Ultra Paradise" },
+	{ cost: 312_500_000_000_000, id: "ultra-black", name: "Ultra Black" },
+].map((upgrade) => ({
+	...upgrade,
+	description: "Double all production",
+	kind: "flavor",
+}));
+
+export const MILESTONES = [10, 25, 50, 100] as const;
+const MILESTONE_COST_MULTIPLIERS = [30, 250, 2500, 25_000] as const;
+
 const milestoneUpgrades: RunUpgradeDefinition[] = PRODUCERS.flatMap(
 	(producer) =>
 		MILESTONES.map((requiredOwned, index) => ({
-			cost: producer.baseCost * (index === 0 ? 100 : 1000),
+			cost: producer.baseCost * (MILESTONE_COST_MULTIPLIERS[index] ?? 1),
 			description: `Double ${producer.name} production`,
 			id: `${producer.id}-${requiredOwned}`,
+			kind: "milestone" as const,
 			name: `${producer.name} ${requiredOwned}`,
 			producerId: producer.id,
 			requiredOwned,
@@ -127,6 +129,8 @@ const milestoneUpgrades: RunUpgradeDefinition[] = PRODUCERS.flatMap(
 
 export const RUN_UPGRADES: RunUpgradeDefinition[] = [
 	...CLICK_UPGRADES,
+	...CPS_CLICK_UPGRADES,
+	...FLAVOR_UPGRADES,
 	...milestoneUpgrades,
 ];
 
@@ -153,7 +157,7 @@ export const GOLDEN_UPGRADES = [
 		id: "auto-tapper",
 		maxRank: 5,
 		name: "Auto Tapper",
-		unlockLevel: 5,
+		unlockLevel: 2,
 	},
 	{
 		baseCost: 5,
@@ -161,7 +165,7 @@ export const GOLDEN_UPGRADES = [
 		id: "frenzy-magnet",
 		maxRank: 5,
 		name: "Frenzy Magnet",
-		unlockLevel: 8,
+		unlockLevel: 3,
 	},
 	{
 		baseCost: 40,
@@ -170,7 +174,7 @@ export const GOLDEN_UPGRADES = [
 		id: "smart-stocker",
 		maxRank: 1,
 		name: "Smart Stocker",
-		unlockLevel: 12,
+		unlockLevel: 4,
 	},
 	{
 		baseCost: 100,
@@ -178,7 +182,7 @@ export const GOLDEN_UPGRADES = [
 		id: "golden-reactor",
 		maxRank: 1,
 		name: "Golden Reactor",
-		unlockLevel: 20,
+		unlockLevel: 6,
 	},
 	{
 		baseCost: 250,
@@ -186,7 +190,7 @@ export const GOLDEN_UPGRADES = [
 		id: "time-capsule",
 		maxRank: 1,
 		name: "Time Capsule",
-		unlockLevel: 30,
+		unlockLevel: 8,
 	},
 ] as const;
 
@@ -197,6 +201,7 @@ export interface GameProgress {
 	goldenUpgrades: GoldenUpgradeRanks;
 	producers: ProducerCounts;
 	runUpgrades: string[];
+	totalGoldenCans: number;
 }
 
 export interface GameSnapshot extends GameProgress {
@@ -218,7 +223,6 @@ export interface GameSnapshot extends GameProgress {
 	revision: number;
 	runCans: number;
 	serverNow: number;
-	totalGoldenCans: number;
 }
 
 const producerIds = new Set<string>(PRODUCERS.map(({ id }) => id));
@@ -239,11 +243,13 @@ const scientificNumberFormatter = new Intl.NumberFormat("en", {
 });
 
 export const createInitialProducers = (): ProducerCounts => ({
+	"can-portal": 0,
 	"can-warehouse": 0,
 	"corner-shop": 0,
 	"filling-line": 0,
 	"mini-fridge": 0,
 	"monster-mine": 0,
+	"monster-singularity": 0,
 	"pull-tab": 0,
 	"vending-machine": 0,
 	"white-reactor": 0,
@@ -322,11 +328,24 @@ export const goldenUpgradeCost = (
 	rank: number
 ): number => {
 	const upgrade = getGoldenUpgrade(upgradeId);
-	return upgrade ? upgrade.baseCost * 2 ** rank : MAX_GAME_VALUE;
+	return upgrade ? upgrade.baseCost * (rank + 1) : MAX_GAME_VALUE;
 };
 
 const hasRunUpgrade = (progress: GameProgress, id: string): boolean =>
 	progress.runUpgrades.includes(id);
+
+const countRunUpgradesOfKind = (
+	progress: GameProgress,
+	kind: RunUpgradeKind
+): number => {
+	let count = 0;
+	for (const id of progress.runUpgrades) {
+		if (runUpgradeById.get(id)?.kind === kind) {
+			count += 1;
+		}
+	}
+	return count;
+};
 
 const producerMultiplier = (
 	progress: GameProgress,
@@ -344,18 +363,7 @@ const producerMultiplier = (
 const reactorMultiplier = (progress: GameProgress): number =>
 	progress.goldenUpgrades["golden-reactor"] > 0 ? 2 : 1;
 
-export const calculateClickValue = (progress: GameProgress): number => {
-	let clickMultiplier = 1;
-	for (const upgrade of CLICK_UPGRADES) {
-		if (hasRunUpgrade(progress, upgrade.id)) {
-			clickMultiplier *= 10;
-		}
-	}
-	clickMultiplier *= 1 + progress.goldenUpgrades["golden-grip"] * 0.25;
-	return clampGameValue(clickMultiplier * reactorMultiplier(progress));
-};
-
-export const calculateCps = (progress: GameProgress): number => {
+export const calculateProductionCps = (progress: GameProgress): number => {
 	let producerCps = 0;
 	for (const producer of PRODUCERS) {
 		producerCps +=
@@ -363,12 +371,28 @@ export const calculateCps = (progress: GameProgress): number => {
 			progress.producers[producer.id] *
 			producerMultiplier(progress, producer.id);
 	}
+	producerCps *= 2 ** countRunUpgradesOfKind(progress, "flavor");
 	producerCps *= 1 + progress.goldenUpgrades["endless-chill"] * 0.15;
+	producerCps *=
+		1 + Math.max(0, progress.totalGoldenCans) * GOLDEN_CAN_PRODUCTION_BONUS;
+	return clampGameValue(producerCps * reactorMultiplier(progress));
+};
+
+export const calculateClickValue = (progress: GameProgress): number => {
+	const clickBase =
+		CLICK_UPGRADE_MULTIPLIER ** countRunUpgradesOfKind(progress, "click");
+	const cpsPercent =
+		countRunUpgradesOfKind(progress, "cps-click") * CPS_CLICK_PERCENT;
+	const gripMultiplier = 1 + progress.goldenUpgrades["golden-grip"] * 0.25;
+	return clampGameValue(
+		(clickBase + calculateProductionCps(progress) * cpsPercent) * gripMultiplier
+	);
+};
+
+export const calculateCps = (progress: GameProgress): number => {
 	const autoClickCps =
 		progress.goldenUpgrades["auto-tapper"] * calculateClickValue(progress);
-	return clampGameValue(
-		producerCps * reactorMultiplier(progress) + autoClickCps
-	);
+	return clampGameValue(calculateProductionCps(progress) + autoClickCps);
 };
 
 export const acceptManualClicks = (
@@ -404,16 +428,17 @@ export const calculateIdleGain = (
 	);
 };
 
-export const prestigeRequirement = (prestigeLevel: number): number =>
-	PRESTIGE_THRESHOLD * 2 ** prestigeLevel;
+export const goldenCanPotential = (lifetimeCans: number): number =>
+	Math.floor(Math.sqrt(clampGameValue(lifetimeCans) / GOLDEN_CAN_BASE));
 
 export const prestigeReward = (
-	runCans: number,
-	prestigeLevel: number
+	lifetimeCans: number,
+	totalGoldenCans: number
 ): number =>
-	Math.floor(
-		Math.log2(clampGameValue(runCans) / prestigeRequirement(prestigeLevel) + 1)
-	);
+	Math.max(0, goldenCanPotential(lifetimeCans) - Math.max(0, totalGoldenCans));
+
+export const nextGoldenCanRequirement = (totalGoldenCans: number): number =>
+	clampGameValue(GOLDEN_CAN_BASE * (Math.max(0, totalGoldenCans) + 1) ** 2);
 
 export const frenzyChance = (progress: GameProgress): number =>
 	0.005 * (1 + progress.goldenUpgrades["frenzy-magnet"] * 0.25);
