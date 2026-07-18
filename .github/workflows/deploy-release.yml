@@ -57,7 +57,6 @@ jobs:
           . /etc/valkoinenmonsterv2/api.env
           set +a
           /root/.bun/bin/bun run --cwd apps/server build
-          /root/.bun/bin/bun run db:migrate
 
           systemctl restart valkoinenmonsterv2-api valkoinenmonsterv2-web
           systemctl is-active --quiet valkoinenmonsterv2-api valkoinenmonsterv2-web
