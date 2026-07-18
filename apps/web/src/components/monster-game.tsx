@@ -61,6 +61,13 @@ const HEARTBEAT_MS = 5000;
 const DISPLAY_TICK_MS = 100;
 const CAN_AUDIO_POOL_SIZE = 6;
 const PARTICLES = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+const CAN_IMAGES = {
+	es: { frenzy: "/es_sugar_free.avif", regular: "/es.avif" },
+	monster: {
+		frenzy: "/goldenmonster.png",
+		regular: "/valkoinenmonster.webp",
+	},
+} as const;
 
 const formatElapsedTime = (elapsedMs: number): string => {
 	const totalSeconds = Math.floor(elapsedMs / 1000);
@@ -284,20 +291,28 @@ const StatsCard = ({
 interface CanCardProps {
 	clickLabels: ClickLabel[];
 	game: GameSnapshot;
+	isEsMode: boolean;
 	isMuted: boolean;
 	onClick: () => void;
+	onToggleEsMode: () => void;
 	onToggleMute: () => void;
 }
 
 const CanCard = ({
 	game,
+	isEsMode,
 	isMuted,
 	onClick,
+	onToggleEsMode,
 	onToggleMute,
 	clickLabels,
 }: CanCardProps) => {
 	const now = game.serverNow;
 	const isFrenzyActive = (game.frenzyEndsAt ?? 0) > now;
+	const canImage =
+		CAN_IMAGES[isEsMode ? "es" : "monster"][
+			isFrenzyActive ? "frenzy" : "regular"
+		];
 	const frenzySeconds = isFrenzyActive
 		? Math.max(0, ((game.frenzyEndsAt ?? now) - now) / 1000)
 		: 0;
@@ -314,7 +329,15 @@ const CanCard = ({
 						{isFrenzyActive ? "Frenzy ×10" : "Crack a can"}
 					</CardTitle>
 				</div>
-				<CardAction>
+				<CardAction className="flex gap-2">
+					<Button
+						aria-label="Toggle ES mode"
+						aria-pressed={isEsMode}
+						onClick={onToggleEsMode}
+						variant={isEsMode ? "default" : "outline"}
+					>
+						ES
+					</Button>
 					<Button
 						aria-label={isMuted ? "Unmute game audio" : "Mute game audio"}
 						onClick={onToggleMute}
@@ -352,9 +375,7 @@ const CanCard = ({
 							className="monster-can-image"
 							draggable={false}
 							height={420}
-							src={
-								isFrenzyActive ? "/goldenmonster.png" : "/valkoinenmonster.webp"
-							}
+							src={canImage}
 							width={420}
 						/>
 					</button>
@@ -665,6 +686,7 @@ export const MonsterGame = () => {
 	const clickTimesRef = useRef<number[]>([]);
 	const clickLabelIdRef = useRef(0);
 	const clickLabelTimeoutsRef = useRef(new Set<number>());
+	const [isEsMode, setIsEsMode] = useState(false);
 	const [isMuted, setIsMuted] = useState(() =>
 		typeof window === "undefined"
 			? false
@@ -1182,6 +1204,9 @@ export const MonsterGame = () => {
 			return !muted;
 		});
 	}, []);
+	const toggleEsMode = useCallback(() => {
+		setIsEsMode((enabled) => !enabled);
+	}, []);
 	const handleBuyProducer = useCallback(
 		(producerId: ProducerId) => {
 			buyProducerNow(producerId).catch(() => undefined);
@@ -1203,6 +1228,7 @@ export const MonsterGame = () => {
 		<main
 			className={cn(
 				"monster-game mx-auto grid w-full max-w-[1440px] gap-4 px-4 pt-4 pb-8 xl:grid-cols-[300px_minmax(340px,1fr)_380px] xl:grid-rows-[auto_1fr]",
+				isEsMode && "is-es",
 				isFrenzyActive && "is-frenzy"
 			)}
 		>
@@ -1215,8 +1241,10 @@ export const MonsterGame = () => {
 			<CanCard
 				clickLabels={clickLabels}
 				game={game}
+				isEsMode={isEsMode}
 				isMuted={isMuted}
 				onClick={clickCan}
+				onToggleEsMode={toggleEsMode}
 				onToggleMute={toggleMute}
 			/>
 			<ShopCard
