@@ -552,8 +552,8 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 };
 
 export const prestige: GameMutation = (state) => {
-	const requirement = prestigeRequirement(state.totalGoldenCans);
-	const reward = prestigeReward(state.runCans, state.totalGoldenCans);
+	const requirement = prestigeRequirement(state.prestigeLevel);
+	const reward = prestigeReward(state.runCans, state.prestigeLevel);
 	if (state.runCans < requirement || reward < 1) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -621,8 +621,8 @@ export const gameRouter = router({
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
 			const before = normalizeState(await ensureGameState(ctx.session.user.id));
-			const requirement = prestigeRequirement(before.totalGoldenCans);
-			const reward = prestigeReward(before.runCans, before.totalGoldenCans);
+			const requirement = prestigeRequirement(before.prestigeLevel);
+			const reward = prestigeReward(before.runCans, before.prestigeLevel);
 			const snapshot = await mutateGameState(
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
@@ -752,8 +752,8 @@ export const createAgentGameObservation = (
 	const frenzyActive = (snapshot.frenzyEndsAt ?? 0) > snapshot.serverNow;
 	const clickValue = calculateClickValue(state);
 	const manualClicksAvailable = Math.floor(state.manualClickBudget);
-	const requirement = prestigeRequirement(state.totalGoldenCans);
-	const reward = prestigeReward(state.runCans, state.totalGoldenCans);
+	const requirement = prestigeRequirement(state.prestigeLevel);
+	const reward = prestigeReward(state.runCans, state.prestigeLevel);
 	const producers = PRODUCERS.map((producer) => {
 		const owned = state.producers[producer.id];
 		const cost = producerCost(producer.id, owned);

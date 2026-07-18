@@ -215,8 +215,8 @@ const StatsCard = ({
 	const clickValue =
 		calculateClickValue(game) *
 		((game.frenzyEndsAt ?? 0) > game.serverNow ? FRENZY_MULTIPLIER : 1);
-	const requirement = prestigeRequirement(game.totalGoldenCans);
-	const reward = prestigeReward(game.runCans, game.totalGoldenCans);
+	const requirement = prestigeRequirement(game.prestigeLevel);
+	const reward = prestigeReward(game.runCans, game.prestigeLevel);
 	return (
 		<Card className="order-2 gap-0 self-start py-0 ring-foreground xl:col-start-1 xl:row-start-1">
 			<div className="p-(--card-spacing) pb-3">
@@ -790,12 +790,12 @@ export const MonsterGame = () => {
 		if (!game) {
 			return;
 		}
-		const requirement = prestigeRequirement(game.totalGoldenCans);
+		const requirement = prestigeRequirement(game.prestigeLevel);
 		if (game.runCans >= requirement && !prestigeReadyTrackedRef.current) {
 			prestigeReadyTrackedRef.current = true;
 			track(AnalyticsEvents.game.prestigeReady, {
 				prestige_level: game.prestigeLevel,
-				reward_golden_cans: prestigeReward(game.runCans, game.totalGoldenCans),
+				reward_golden_cans: prestigeReward(game.runCans, game.prestigeLevel),
 				run_cans_bucket: bucketCans(game.runCans),
 			});
 		}
@@ -973,7 +973,7 @@ export const MonsterGame = () => {
 							prestige_level: before.prestigeLevel,
 							reward_golden_cans: prestigeReward(
 								before.runCans,
-								before.totalGoldenCans
+								before.prestigeLevel
 							),
 							run_cans_bucket: bucketCans(before.runCans),
 						});
@@ -1184,7 +1184,7 @@ export const MonsterGame = () => {
 		if (!current) {
 			return;
 		}
-		const reward = prestigeReward(current.runCans, current.totalGoldenCans);
+		const reward = prestigeReward(current.runCans, current.prestigeLevel);
 		// biome-ignore lint/suspicious/noAlert: The agreed game flow uses the browser's native confirmation.
 		const confirmed = window.confirm(
 			`Reset this run for ${reward} golden cans? Permanent upgrades and lifetime cans stay.`

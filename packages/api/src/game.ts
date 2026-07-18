@@ -404,17 +404,15 @@ export const calculateIdleGain = (
 	);
 };
 
-export const prestigeRequirement = (totalGoldenCans: number): number =>
-	PRESTIGE_THRESHOLD * 2 ** totalGoldenCans;
+export const prestigeRequirement = (prestigeLevel: number): number =>
+	PRESTIGE_THRESHOLD * 2 ** prestigeLevel;
 
 export const prestigeReward = (
 	runCans: number,
-	totalGoldenCans: number
+	prestigeLevel: number
 ): number =>
 	Math.floor(
-		Math.log2(
-			clampGameValue(runCans) / prestigeRequirement(totalGoldenCans) + 1
-		)
+		Math.log2(clampGameValue(runCans) / prestigeRequirement(prestigeLevel) + 1)
 	);
 
 export const frenzyChance = (progress: GameProgress): number =>
