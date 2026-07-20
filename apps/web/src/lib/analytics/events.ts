@@ -17,10 +17,12 @@ export const AnalyticsEvents = {
 		signUpSucceeded: "auth.sign_up.succeeded",
 	},
 	game: {
+		achievementUnlocked: "game.achievement.unlocked",
 		clickMilestone: "game.click.milestone",
 		error: "game.error",
 		frenzyEnded: "game.frenzy.ended",
 		frenzyStarted: "game.frenzy.started",
+		goldenRushClaimed: "game.golden_rush.claimed",
 		loaded: "game.loaded",
 		offlineReturn: "game.offline.return",
 		prestigeCancelled: "game.prestige.cancelled",
@@ -37,7 +39,9 @@ export const AnalyticsEvents = {
 	},
 	ui: {
 		audioToggled: "ui.audio_toggled",
+		buyQuantityChanged: "ui.buy_quantity_changed",
 		leaderboardViewed: "ui.leaderboard_viewed",
+		smartStockerToggled: "ui.smart_stocker_toggled",
 		themeChanged: "ui.theme_changed",
 	},
 } as const;

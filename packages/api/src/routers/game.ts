@@ -13,33 +13,43 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
 	acceptManualClicks,
+	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
 	cheapestAffordableProducer,
 	clampGameValue,
+	createHeadStartProducers,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
-	FRENZY_DURATION_MS,
-	FRENZY_MULTIPLIER,
+	frenzyDurationMs,
+	frenzyMultiplier,
 	type GameProgress,
 	type GameSnapshot,
+	GOLDEN_RUSH_CLAIM_WINDOW_MS,
 	GOLDEN_UPGRADES,
+	type GoldenRushBuffKind,
+	type GoldenRushReward,
 	type GoldenUpgradeRanks,
 	getGoldenUpgrade,
 	getRunUpgrade,
 	goldenUpgradeCost,
+	isGoldenRushBuffKind,
 	isGoldenUpgradeId,
 	isProducerId,
 	isRunUpgradeId,
 	nextGoldenCanRequirement,
-	OFFLINE_PRODUCTION_MULTIPLIER,
+	offlineProductionMultiplier,
 	PRODUCERS,
+	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerCounts,
 	prestigeReward,
+	producerBulkCost,
 	producerCost,
 	RUN_UPGRADES,
 	randomFrenzyThreshold,
+	rollGoldenRushDelayMs,
+	rollGoldenRushReward,
 } from "../game";
 import { protectedProcedure, router } from "../index";
 
@@ -99,9 +109,9 @@ export type MutationInput = z.infer<typeof mutationInput>;
 export type AgentGameCommand = z.infer<typeof agentGameCommandSchema>;
 export type MutableGameState = Omit<
 	GameStateRow,
-	"producers" | "goldenUpgrades"
+	"producers" | "goldenUpgrades" | "goldenRushBuffKind"
 > &
-	GameProgress;
+	GameProgress & { goldenRushBuffKind: GoldenRushBuffKind | null };
 type GameMutation = (state: MutableGameState, now: Date) => MutableGameState;
 
 const secureRandom = (): number => {
@@ -139,12 +149,19 @@ const normalizeGoldenUpgrades = (
 
 const normalizeState = (state: GameStateRow): MutableGameState => ({
 	...state,
+	goldenRushBuffKind:
+		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
+			? state.goldenRushBuffKind
+			: null,
 	goldenUpgrades: normalizeGoldenUpgrades(state.goldenUpgrades),
 	producers: normalizeProducers(state.producers),
 	runUpgrades: state.runUpgrades.filter(isRunUpgradeId),
 });
 
-export const createDefaultGameState = (userId: string, now: Date) => {
+export const createDefaultGameState = (
+	userId: string,
+	now: Date
+): MutableGameState => {
 	const progress: GameProgress = {
 		goldenUpgrades: createInitialGoldenUpgrades(),
 		producers: createInitialProducers(),
@@ -162,6 +179,9 @@ export const createDefaultGameState = (userId: string, now: Date) => {
 		...progress,
 		createdAt: now,
 		frenzyEndsAt: null,
+		goldenRushBuffEndsAt: null,
+		goldenRushBuffKind: null,
+		goldenRushReadyAt: null,
 		lastAccruedAt: now,
 		lastOperationId: null,
 		manualClickBudget: 20,
@@ -224,37 +244,57 @@ const accrueStateWithResult = (
 	);
 	const frenzyEndMs = state.frenzyEndsAt?.getTime() ?? 0;
 	const frenzyIdleMs = Math.max(0, Math.min(nowMs, frenzyEndMs) - previousMs);
+	const buffEndMs = state.goldenRushBuffEndsAt?.getTime() ?? 0;
+	const productionBuffMs =
+		state.goldenRushBuffKind === "production_frenzy"
+			? Math.max(0, Math.min(nowMs, buffEndMs) - previousMs)
+			: 0;
 	const offlineMultiplier =
-		elapsedMs >= OFFLINE_AFTER_MS
-			? OFFLINE_PRODUCTION_MULTIPLIER *
-				(state.goldenUpgrades["time-capsule"] > 0 ? 2 : 1)
-			: 1;
+		elapsedMs >= OFFLINE_AFTER_MS ? offlineProductionMultiplier(state) : 1;
 	const idleGain = calculateIdleGain(
 		state,
 		elapsedMs,
 		frenzyIdleMs,
-		offlineMultiplier
+		offlineMultiplier,
+		productionBuffMs,
+		PRODUCTION_FRENZY_MULTIPLIER
 	);
 	const isFrenzyActive = frenzyEndMs > nowMs;
+	const isClickRushActive =
+		state.goldenRushBuffKind === "click_rush" && buffEndMs > nowMs;
 	const clickGain =
 		acceptedClicks *
 		calculateClickValue(state) *
-		(isFrenzyActive ? FRENZY_MULTIPLIER : 1);
+		(isFrenzyActive ? frenzyMultiplier(state) : 1) *
+		(isClickRushActive ? CLICK_RUSH_MULTIPLIER : 1);
 	let nextState = addCans(state, idleGain + clickGain);
 	let { nextFrenzyClick } = state;
 	let frenzyEndsAt =
 		state.frenzyEndsAt && frenzyEndMs > nowMs ? state.frenzyEndsAt : null;
 
 	if (!isFrenzyActive && acceptedClicks >= nextFrenzyClick) {
-		frenzyEndsAt = new Date(nowMs + FRENZY_DURATION_MS);
+		frenzyEndsAt = new Date(nowMs + frenzyDurationMs(state));
 		nextFrenzyClick = randomFrenzyThreshold(nextState, secureRandom());
 	} else if (!isFrenzyActive) {
 		nextFrenzyClick -= acceptedClicks;
 	}
 
+	let { goldenRushBuffEndsAt, goldenRushBuffKind, goldenRushReadyAt } = state;
+	if (goldenRushBuffEndsAt && goldenRushBuffEndsAt.getTime() <= nowMs) {
+		goldenRushBuffEndsAt = null;
+		goldenRushBuffKind = null;
+	}
+	const readyMs = goldenRushReadyAt?.getTime() ?? null;
+	if (readyMs === null || nowMs > readyMs + GOLDEN_RUSH_CLAIM_WINDOW_MS) {
+		goldenRushReadyAt = new Date(nowMs + rollGoldenRushDelayMs(secureRandom()));
+	}
+
 	nextState = {
 		...nextState,
 		frenzyEndsAt,
+		goldenRushBuffEndsAt,
+		goldenRushBuffKind,
+		goldenRushReadyAt,
 		lastAccruedAt: now,
 		manualClickBudget: remainingBudget,
 		nextFrenzyClick,
@@ -278,6 +318,9 @@ const toSnapshot = (
 	cans: state.cans,
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
 	goldenCans: state.goldenCans,
+	goldenRushBuffEndsAt: state.goldenRushBuffEndsAt?.getTime() ?? null,
+	goldenRushBuffKind: state.goldenRushBuffKind,
+	goldenRushReadyAt: state.goldenRushReadyAt?.getTime() ?? null,
 	goldenUpgrades: state.goldenUpgrades,
 	idleReport: null,
 	isAnonymous,
@@ -428,12 +471,16 @@ const insufficientFunds = () =>
 		message: "Not enough cans for that upgrade",
 	});
 
-export const buyProducer = (producerId: string): GameMutation => {
+export const buyProducer = (producerId: string, quantity = 1): GameMutation => {
 	if (!isProducerId(producerId)) {
 		throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown producer" });
 	}
 	return (state) => {
-		const cost = producerCost(producerId, state.producers[producerId]);
+		const cost = producerBulkCost(
+			producerId,
+			state.producers[producerId],
+			quantity
+		);
 		if (state.cans < cost) {
 			throw insufficientFunds();
 		}
@@ -442,7 +489,7 @@ export const buyProducer = (producerId: string): GameMutation => {
 			cans: state.cans - cost,
 			producers: {
 				...state.producers,
-				[producerId]: state.producers[producerId] + 1,
+				[producerId]: state.producers[producerId] + quantity,
 			},
 		};
 	};
@@ -551,6 +598,40 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 	};
 };
 
+export const claimGoldenRush =
+	(
+		randomValue: number,
+		onReward?: (reward: GoldenRushReward) => void
+	): GameMutation =>
+	(state, now) => {
+		const nowMs = now.getTime();
+		const readyMs = state.goldenRushReadyAt?.getTime() ?? null;
+		if (
+			readyMs === null ||
+			nowMs < readyMs ||
+			nowMs > readyMs + GOLDEN_RUSH_CLAIM_WINDOW_MS
+		) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "The golden can is gone",
+			});
+		}
+		const reward = rollGoldenRushReward(state, state.cans, randomValue);
+		onReward?.(reward);
+		const goldenRushReadyAt = new Date(
+			nowMs + rollGoldenRushDelayMs(secureRandom())
+		);
+		if (reward.kind === "lucky") {
+			return { ...addCans(state, reward.cans), goldenRushReadyAt };
+		}
+		return {
+			...state,
+			goldenRushBuffEndsAt: new Date(nowMs + reward.durationMs),
+			goldenRushBuffKind: reward.kind,
+			goldenRushReadyAt,
+		};
+	};
+
 export const prestige: GameMutation = (state) => {
 	const reward = prestigeReward(state.lifetimeCans, state.totalGoldenCans);
 	if (reward < 1) {
@@ -561,7 +642,7 @@ export const prestige: GameMutation = (state) => {
 	}
 	const nextProgress: GameProgress = {
 		goldenUpgrades: state.goldenUpgrades,
-		producers: createInitialProducers(),
+		producers: createHeadStartProducers(state.goldenUpgrades),
 		runUpgrades: [],
 		totalGoldenCans: state.totalGoldenCans + reward,
 	};
@@ -594,13 +675,18 @@ const sessionIsAnonymous = (session: {
 
 export const gameRouter = router({
 	buyProducer: protectedProcedure
-		.input(mutationInput.extend({ producerId: z.string() }))
+		.input(
+			mutationInput.extend({
+				producerId: z.string(),
+				quantity: z.number().int().min(1).max(100).optional(),
+			})
+		)
 		.mutation(({ ctx, input }) =>
 			mutateGameState(
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
 				input,
-				buyProducer(input.producerId)
+				buyProducer(input.producerId, input.quantity ?? 1)
 			)
 		),
 	buyUpgrade: protectedProcedure
@@ -613,6 +699,20 @@ export const gameRouter = router({
 				buyUpgrade(input.upgradeId)
 			)
 		),
+	claimGoldenRush: protectedProcedure
+		.input(mutationInput)
+		.mutation(async ({ ctx, input }) => {
+			let reward: GoldenRushReward | null = null;
+			const snapshot = await mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				claimGoldenRush(secureRandom(), (rolled) => {
+					reward = rolled;
+				})
+			);
+			return { reward, snapshot };
+		}),
 	getState: protectedProcedure.query(({ ctx }) =>
 		getGameState(ctx.session.user.id, sessionIsAnonymous(ctx.session))
 	),
@@ -858,11 +958,12 @@ export const createAgentGameObservation = (
 		stats: {
 			baseClickValue: clickValue,
 			cansPerSecond: calculateCps(state),
-			effectiveClickValue: clickValue * (frenzyActive ? FRENZY_MULTIPLIER : 1),
+			effectiveClickValue:
+				clickValue * (frenzyActive ? frenzyMultiplier(state) : 1),
 			frenzy: {
 				active: frenzyActive,
 				clicksUntilNext: state.nextFrenzyClick,
-				multiplier: frenzyActive ? FRENZY_MULTIPLIER : 1,
+				multiplier: frenzyActive ? frenzyMultiplier(state) : 1,
 				remainingMilliseconds: frenzyActive
 					? Math.max(0, (snapshot.frenzyEndsAt ?? 0) - snapshot.serverNow)
 					: 0,

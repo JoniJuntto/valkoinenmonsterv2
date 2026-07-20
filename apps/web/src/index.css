@@ -306,10 +306,51 @@
 	}
 }
 
+.monster-golden-rush {
+	position: fixed;
+	z-index: 60;
+	width: 6.5rem;
+	padding: 0;
+	cursor: pointer;
+	border: 0;
+	background: transparent;
+	filter: drop-shadow(
+		0 0 1.5rem color-mix(in oklch, var(--monster-gold) 80%, transparent)
+	);
+	animation: monster-golden-rush-bob 1.6s ease-in-out infinite alternate;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.monster-golden-rush:hover {
+	filter: drop-shadow(0 0 2.5rem var(--monster-gold));
+}
+
+.monster-golden-rush:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 0.25rem;
+}
+
+.monster-golden-rush-image {
+	display: block;
+	width: 100%;
+	height: auto;
+	pointer-events: none;
+}
+
+@keyframes monster-golden-rush-bob {
+	from {
+		transform: translateY(-0.4rem) rotate(-4deg) scale(1);
+	}
+	to {
+		transform: translateY(0.4rem) rotate(4deg) scale(1.06);
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.monster-game.is-frenzy::before,
 	.monster-can-button.is-frenzy,
 	.monster-click-label,
+	.monster-golden-rush,
 	.monster-particle {
 		animation: none;
 	}

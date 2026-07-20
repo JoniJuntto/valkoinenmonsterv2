@@ -1,24 +1,32 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+	ACHIEVEMENTS,
+	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
 	cheapestAffordableProducer,
 	clampGameValue,
-	FRENZY_DURATION_MS,
-	FRENZY_MULTIPLIER,
+	clickBuffMultiplier,
+	countUnlockedAchievements,
 	formatGameNumber,
+	frenzyDurationMs,
+	frenzyMultiplier,
 	type GameSnapshot,
 	GOLDEN_CAN_BASE,
+	GOLDEN_RUSH_VISIBLE_MS,
 	GOLDEN_UPGRADES,
+	type GoldenRushReward,
 	goldenUpgradeCost,
 	isGoldenUpgradeId,
 	nextGoldenCanRequirement,
-	OFFLINE_PRODUCTION_MULTIPLIER,
+	offlineProductionMultiplier,
 	PRODUCERS,
+	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerId,
 	prestigeReward,
-	producerCost,
+	producerBulkCost,
+	productionTimeMs,
 	RUN_UPGRADES,
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
@@ -95,12 +103,14 @@ type MutationActionName =
 	| "sync"
 	| "buy_producer"
 	| "buy_upgrade"
+	| "claim_golden_rush"
 	| "trigger_frenzy"
 	| "prestige";
 
 interface MutationOptions {
 	action: MutationActionName;
 	producerId?: ProducerId;
+	producerQuantity?: number;
 	producerSource?: "manual" | "smart_stocker";
 	silent?: boolean;
 	upgradeId?: string;
@@ -112,6 +122,86 @@ interface ClickLabel {
 	left: number;
 }
 
+const trackMutationSuccess = (
+	options: MutationOptions,
+	before: GameSnapshot,
+	projected: GameSnapshot
+): void => {
+	switch (options.action) {
+		case "buy_producer": {
+			if (!options.producerId) {
+				break;
+			}
+			const source = options.producerSource ?? "manual";
+			const eventName =
+				source === "smart_stocker"
+					? AnalyticsEvents.game.purchaseProducerAuto
+					: AnalyticsEvents.game.purchaseProducer;
+			track(eventName, {
+				cost: producerBulkCost(
+					options.producerId,
+					before.producers[options.producerId],
+					options.producerQuantity ?? 1
+				),
+				owned_after: projected.producers[options.producerId],
+				producer_id: options.producerId,
+				quantity: options.producerQuantity ?? 1,
+				source,
+			});
+			break;
+		}
+		case "buy_upgrade": {
+			if (!options.upgradeId) {
+				break;
+			}
+			if (isGoldenUpgradeId(options.upgradeId)) {
+				const rank = projected.goldenUpgrades[options.upgradeId];
+				track(AnalyticsEvents.game.purchaseGoldenUpgrade, {
+					cost_golden: goldenUpgradeCost(
+						options.upgradeId,
+						Math.max(0, rank - 1)
+					),
+					prestige_level: projected.prestigeLevel,
+					rank_after: rank,
+					upgrade_id: options.upgradeId,
+				});
+			} else {
+				const upgrade = RUN_UPGRADES.find(
+					(entry) => entry.id === options.upgradeId
+				);
+				track(AnalyticsEvents.game.purchaseRunUpgrade, {
+					cans_bucket: bucketCans(projected.cans),
+					cost: upgrade?.cost ?? 0,
+					upgrade_id: options.upgradeId,
+				});
+			}
+			break;
+		}
+		case "prestige": {
+			track(AnalyticsEvents.game.prestigeConfirmed, {
+				prestige_level: before.prestigeLevel,
+				reward_golden_cans: prestigeReward(
+					before.lifetimeCans,
+					before.totalGoldenCans
+				),
+				run_cans_bucket: bucketCans(before.runCans),
+			});
+			setUserTraits({ prestige_level: projected.prestigeLevel });
+			break;
+		}
+		case "trigger_frenzy": {
+			track(AnalyticsEvents.game.frenzyStarted, {
+				cps_bucket: bucketCps(calculateCps(projected)),
+				prestige_level: projected.prestigeLevel,
+				run_cans_bucket: bucketCans(projected.runCans),
+			});
+			break;
+		}
+		default:
+			break;
+	}
+};
+
 const projectElapsed = (snapshot: GameSnapshot, now: number): GameSnapshot => {
 	const elapsedMs = Math.max(0, now - snapshot.lastAccruedAt);
 	if (elapsedMs === 0) {
@@ -122,9 +212,21 @@ const projectElapsed = (snapshot: GameSnapshot, now: number): GameSnapshot => {
 		0,
 		Math.min(now, frenzyEnd) - snapshot.lastAccruedAt
 	);
-	const normalMs = Math.max(0, elapsedMs - frenzyMs);
+	const buffEnd =
+		snapshot.goldenRushBuffKind === "production_frenzy"
+			? (snapshot.goldenRushBuffEndsAt ?? 0)
+			: 0;
+	const buffMs = Math.max(0, Math.min(now, buffEnd) - snapshot.lastAccruedAt);
 	const gain =
-		calculateCps(snapshot) * ((normalMs + frenzyMs * FRENZY_MULTIPLIER) / 1000);
+		calculateCps(snapshot) *
+		(productionTimeMs(
+			snapshot,
+			elapsedMs,
+			frenzyMs,
+			buffMs,
+			PRODUCTION_FRENZY_MULTIPLIER
+		) /
+			1000);
 	return {
 		...snapshot,
 		bestRunCans: clampGameValue(
@@ -151,11 +253,12 @@ const projectPendingClicks = (
 	const gain =
 		pendingClicks *
 		calculateClickValue(projected) *
-		(isFrenzyActive ? FRENZY_MULTIPLIER : 1);
+		(isFrenzyActive ? frenzyMultiplier(projected) : 1) *
+		clickBuffMultiplier(projected, now);
 	let { frenzyEndsAt, nextFrenzyClick } = projected;
 	if (!isFrenzyActive && pendingClicks >= nextFrenzyClick) {
 		nextFrenzyClick = 0;
-		frenzyEndsAt = now + FRENZY_DURATION_MS;
+		frenzyEndsAt = now + frenzyDurationMs(projected);
 	} else if (!isFrenzyActive) {
 		nextFrenzyClick -= pendingClicks;
 	}
@@ -174,9 +277,23 @@ const projectPendingClicks = (
 };
 
 const UPGRADES_SHOWN_PER_FAMILY = 2;
+const PRODUCERS_REVEALED_AHEAD = 3;
+const BUY_QUANTITIES = [1, 10, 100] as const;
+type BuyQuantity = (typeof BUY_QUANTITIES)[number];
+
 const runUpgradesByCost = [...RUN_UPGRADES].sort(
 	(left, right) => left.cost - right.cost
 );
+
+const selectVisibleProducers = (game: GameSnapshot) => {
+	let highestOwnedIndex = -1;
+	for (const [index, producer] of PRODUCERS.entries()) {
+		if (game.producers[producer.id] > 0) {
+			highestOwnedIndex = index;
+		}
+	}
+	return PRODUCERS.slice(0, highestOwnedIndex + 1 + PRODUCERS_REVEALED_AHEAD);
+};
 
 const selectVisibleRunUpgrades = (
 	game: GameSnapshot
@@ -244,7 +361,11 @@ const NUTRITION_ROWS: {
 	},
 	{ label: "Best run", value: (game) => formatGameNumber(game.bestRunCans) },
 	{ label: "Prestige level", value: (game) => String(game.prestigeLevel) },
-	{ label: "Golden cans", value: (game) => String(game.goldenCans) },
+	{ label: "Golden cans", value: (game) => formatGameNumber(game.goldenCans) },
+	{
+		label: "Caffeine level",
+		value: (game) => `+${countUnlockedAchievements(game)}%`,
+	},
 ];
 
 const StatsCard = ({
@@ -255,7 +376,8 @@ const StatsCard = ({
 }: StatsCardProps) => {
 	const clickValue =
 		calculateClickValue(game) *
-		((game.frenzyEndsAt ?? 0) > game.serverNow ? FRENZY_MULTIPLIER : 1);
+		((game.frenzyEndsAt ?? 0) > game.serverNow ? frenzyMultiplier(game) : 1) *
+		clickBuffMultiplier(game, game.serverNow);
 	const reward = prestigeReward(game.lifetimeCans, game.totalGoldenCans);
 	const nextRequirement = nextGoldenCanRequirement(game.totalGoldenCans);
 	const previousRequirement =
@@ -362,6 +484,14 @@ const CanCard = ({
 	const frenzySeconds = isFrenzyActive
 		? Math.max(0, ((game.frenzyEndsAt ?? now) - now) / 1000)
 		: 0;
+	const isBuffActive = (game.goldenRushBuffEndsAt ?? 0) > now;
+	const buffSeconds = isBuffActive
+		? Math.max(0, ((game.goldenRushBuffEndsAt ?? now) - now) / 1000)
+		: 0;
+	const buffLabel =
+		game.goldenRushBuffKind === "click_rush"
+			? `×${CLICK_RUSH_MULTIPLIER} clicks`
+			: `×${PRODUCTION_FRENZY_MULTIPLIER} production`;
 	return (
 		<Card
 			className={cn(
@@ -372,8 +502,15 @@ const CanCard = ({
 			<CardHeader>
 				<div>
 					<CardTitle className="font-display text-3xl uppercase leading-none tracking-wide">
-						{isFrenzyActive ? "Frenzy ×10" : "Crack a can"}
+						{isFrenzyActive
+							? `Frenzy ×${frenzyMultiplier(game)}`
+							: "Crack a can"}
 					</CardTitle>
+					{isBuffActive ? (
+						<p className="mt-1 font-bold text-monster-gold uppercase tracking-wider">
+							⚡ {buffLabel} · {Math.ceil(buffSeconds)}s
+						</p>
+					) : null}
 				</div>
 				<CardAction className="flex gap-2">
 					<Button
@@ -445,17 +582,25 @@ const CanCard = ({
 };
 
 interface ShopCardProps {
+	buyQuantity: BuyQuantity;
 	game: GameSnapshot;
 	isSaving: boolean;
+	isSmartStockerEnabled: boolean;
 	onBuyProducer: (producerId: ProducerId) => void;
 	onBuyUpgrade: (upgradeId: string) => void;
+	onChangeBuyQuantity: (quantity: BuyQuantity) => void;
+	onToggleSmartStocker: () => void;
 }
 
 const ShopCard = ({
+	buyQuantity,
 	game,
 	isSaving,
+	isSmartStockerEnabled,
 	onBuyProducer,
 	onBuyUpgrade,
+	onChangeBuyQuantity,
+	onToggleSmartStocker,
 }: ShopCardProps) => {
 	const handleProducerClick = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
@@ -466,6 +611,15 @@ const ShopCard = ({
 			}
 		},
 		[onBuyProducer]
+	);
+	const handleQuantityClick = useCallback(
+		(event: MouseEvent<HTMLButtonElement>) => {
+			const quantity = Number(event.currentTarget.dataset.quantity);
+			if (quantity === 1 || quantity === 10 || quantity === 100) {
+				onChangeBuyQuantity(quantity);
+			}
+		},
+		[onChangeBuyQuantity]
 	);
 	const handleUpgradeClick = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
@@ -490,13 +644,29 @@ const ShopCard = ({
 			</CardHeader>
 			<CardContent className="monster-shop flex max-h-[75svh] flex-col gap-6 overflow-y-auto">
 				<section className="flex flex-col gap-2">
-					<h2 className="font-display text-base uppercase tracking-wide">
-						Producers
-					</h2>
+					<div className="flex items-center justify-between gap-2">
+						<h2 className="font-display text-base uppercase tracking-wide">
+							Producers
+						</h2>
+						<div className="flex gap-1">
+							{BUY_QUANTITIES.map((quantity) => (
+								<Button
+									aria-pressed={buyQuantity === quantity}
+									data-quantity={quantity}
+									key={quantity}
+									onClick={handleQuantityClick}
+									size="sm"
+									variant={buyQuantity === quantity ? "default" : "outline"}
+								>
+									×{quantity}
+								</Button>
+							))}
+						</div>
+					</div>
 					<ul className="flex flex-col gap-2">
-						{PRODUCERS.map((producer) => {
+						{selectVisibleProducers(game).map((producer) => {
 							const owned = game.producers[producer.id];
-							const cost = producerCost(producer.id, owned);
+							const cost = producerBulkCost(producer.id, owned, buyQuantity);
 							return (
 								<li
 									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
@@ -577,6 +747,26 @@ const ShopCard = ({
 					<h2 className="font-display text-base uppercase tracking-wide">
 						Golden upgrades
 					</h2>
+					{game.goldenUpgrades["smart-stocker"] > 0 ? (
+						<div className="flex items-center justify-between gap-3 bg-muted/30 p-3">
+							<div>
+								<h3 className="font-medium">Smart Stocker auto-buy</h3>
+								<p className="text-muted-foreground">
+									{isSmartStockerEnabled
+										? "Buying the cheapest producer every 5 seconds"
+										: "Paused — cans pile up untouched"}
+								</p>
+							</div>
+							<Button
+								aria-pressed={isSmartStockerEnabled}
+								onClick={onToggleSmartStocker}
+								size="sm"
+								variant={isSmartStockerEnabled ? "default" : "outline"}
+							>
+								{isSmartStockerEnabled ? "On" : "Off"}
+							</Button>
+						</div>
+					) : null}
 					<ul className="flex flex-col gap-2">
 						{GOLDEN_UPGRADES.map((upgrade) => {
 							const rank = game.goldenUpgrades[upgrade.id];
@@ -612,7 +802,7 @@ const ShopCard = ({
 										size="sm"
 										variant="secondary"
 									>
-										{isMaxed ? "Max" : `${cost} golden`}
+										{isMaxed ? "Max" : `${formatGameNumber(cost)} golden`}
 									</Button>
 								</li>
 							);
@@ -714,6 +904,88 @@ const LeaderboardCard = ({
 	);
 };
 
+interface AchievementsCardProps {
+	game: GameSnapshot;
+}
+
+const AchievementsCard = ({ game }: AchievementsCardProps) => {
+	const unlockedCount = countUnlockedAchievements(game);
+	return (
+		<Card className="order-5 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Achievements
+				</CardTitle>
+				<CardDescription>
+					{unlockedCount}/{ACHIEVEMENTS.length} unlocked · caffeine level +
+					{unlockedCount}% production
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="monster-shop max-h-[40svh] overflow-y-auto">
+				<ul className="flex flex-col gap-1">
+					{ACHIEVEMENTS.map((achievement) => {
+						const isUnlocked = achievement.isUnlocked(game);
+						return (
+							<li
+								className={cn(
+									"flex items-baseline justify-between gap-2 p-2",
+									isUnlocked ? "bg-muted/30" : "opacity-45"
+								)}
+								key={achievement.id}
+							>
+								<span className={cn(isUnlocked && "font-medium")}>
+									{isUnlocked ? "★" : "☆"} {achievement.name}
+								</span>
+								<span className="text-right text-muted-foreground">
+									{achievement.description}
+								</span>
+							</li>
+						);
+					})}
+				</ul>
+			</CardContent>
+		</Card>
+	);
+};
+
+interface GoldenRushCanProps {
+	game: GameSnapshot;
+	onClaim: () => void;
+}
+
+const GoldenRushCan = ({ game, onClaim }: GoldenRushCanProps) => {
+	const readyAt = game.goldenRushReadyAt;
+	const isVisible =
+		readyAt !== null &&
+		game.serverNow >= readyAt &&
+		game.serverNow <= readyAt + GOLDEN_RUSH_VISIBLE_MS;
+	if (!isVisible) {
+		return null;
+	}
+	// Deterministic pseudo-random placement so the can holds still between ticks.
+	const seed = Math.floor(readyAt / 1000);
+	const left = 8 + ((seed * 37) % 71);
+	const top = 12 + ((seed * 53) % 61);
+	return (
+		<button
+			aria-label="Grab the golden can before it disappears"
+			className="monster-golden-rush"
+			onClick={onClaim}
+			style={{ left: `${left}%`, top: `${top}%` }}
+			type="button"
+		>
+			<img
+				alt=""
+				className="monster-golden-rush-image"
+				draggable={false}
+				height={160}
+				src="/goldenmonster.png"
+				width={110}
+			/>
+		</button>
+	);
+};
+
 export const MonsterGame = () => {
 	const trpc = useTRPC();
 	const sessionQuery = authClient.useSession();
@@ -734,6 +1006,13 @@ export const MonsterGame = () => {
 			? false
 			: window.localStorage.getItem("monster-muted") === "true"
 	);
+	const [buyQuantity, setBuyQuantity] = useState<BuyQuantity>(1);
+	const [isSmartStockerEnabled, setIsSmartStockerEnabled] = useState(
+		() =>
+			typeof window === "undefined" ||
+			window.localStorage.getItem("monster-smart-stocker") !== "false"
+	);
+	const unlockedAchievementIdsRef = useRef<Set<string> | null>(null);
 	const canAudioPoolRef = useRef<HTMLAudioElement[]>([]);
 	const canAudioIndexRef = useRef(0);
 	const dubstepAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -778,6 +1057,9 @@ export const MonsterGame = () => {
 	const { mutateAsync: prestigeMutation } = useMutation(
 		trpc.game.prestige.mutationOptions()
 	);
+	const { mutateAsync: claimGoldenRushMutation } = useMutation(
+		trpc.game.claimGoldenRush.mutationOptions()
+	);
 
 	const updateGame = useCallback(
 		(updater: (current: GameSnapshot) => GameSnapshot) => {
@@ -814,9 +1096,7 @@ export const MonsterGame = () => {
 		}
 		lastIdleReportAtRef.current = idleReportAt;
 		const averageCps = idleReport.cansEarned / (idleReport.elapsedMs / 1000);
-		const offlineRate =
-			OFFLINE_PRODUCTION_MULTIPLIER *
-			((stateData?.goldenUpgrades["time-capsule"] ?? 0) > 0 ? 2 : 1);
+		const offlineRate = offlineProductionMultiplier(stateData);
 		toast.success("Welcome back", {
 			description: `${formatElapsedTime(idleReport.elapsedMs)} away · ${formatGameNumber(idleReport.cansEarned)} cans · ${formatGameNumber(averageCps)} cans/s average · ${offlineRate * 100}% idle rate`,
 			duration: 12_000,
@@ -895,6 +1175,44 @@ export const MonsterGame = () => {
 		window.localStorage.setItem("monster-muted", String(isMuted));
 	}, [isMuted]);
 
+	useEffect(() => {
+		window.localStorage.setItem(
+			"monster-smart-stocker",
+			String(isSmartStockerEnabled)
+		);
+	}, [isSmartStockerEnabled]);
+
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const unlockedIds = new Set<string>();
+		for (const achievement of ACHIEVEMENTS) {
+			if (achievement.isUnlocked(game)) {
+				unlockedIds.add(achievement.id);
+			}
+		}
+		const previous = unlockedAchievementIdsRef.current;
+		unlockedAchievementIdsRef.current = unlockedIds;
+		if (!previous || unlockedIds.size <= previous.size) {
+			return;
+		}
+		const fresh = ACHIEVEMENTS.filter(
+			(achievement) =>
+				unlockedIds.has(achievement.id) && !previous.has(achievement.id)
+		);
+		for (const achievement of fresh) {
+			toast.success(`Achievement unlocked: ${achievement.name}`, {
+				description: `Caffeine level +${unlockedIds.size}% production`,
+			});
+			track(AnalyticsEvents.game.achievementUnlocked, {
+				achievement_id: achievement.id,
+				caffeine_level: unlockedIds.size,
+				prestige_level: game.prestigeLevel,
+			});
+		}
+	}, [game]);
+
 	useEffect(
 		() => () => {
 			for (const timeout of clickLabelTimeoutsRef.current) {
@@ -926,7 +1244,7 @@ export const MonsterGame = () => {
 	useEffect(() => {
 		if (wasFrenzyActiveRef.current && !isFrenzyActive && game) {
 			track(AnalyticsEvents.game.frenzyEnded, {
-				duration_ms: FRENZY_DURATION_MS,
+				duration_ms: frenzyDurationMs(game),
 				prestige_level: game.prestigeLevel,
 			});
 		}
@@ -961,78 +1279,10 @@ export const MonsterGame = () => {
 				gameRef.current = projected;
 				setGame(projected);
 
-				switch (options.action) {
-					case "buy_producer": {
-						if (!options.producerId) {
-							break;
-						}
-						const source = options.producerSource ?? "manual";
-						const eventName =
-							source === "smart_stocker"
-								? AnalyticsEvents.game.purchaseProducerAuto
-								: AnalyticsEvents.game.purchaseProducer;
-						track(eventName, {
-							cost: producerCost(
-								options.producerId,
-								before.producers[options.producerId]
-							),
-							owned_after: projected.producers[options.producerId],
-							producer_id: options.producerId,
-							source,
-						});
-						break;
-					}
-					case "buy_upgrade": {
-						if (!options.upgradeId) {
-							break;
-						}
-						if (isGoldenUpgradeId(options.upgradeId)) {
-							const rank = projected.goldenUpgrades[options.upgradeId];
-							track(AnalyticsEvents.game.purchaseGoldenUpgrade, {
-								cost_golden: goldenUpgradeCost(
-									options.upgradeId,
-									Math.max(0, rank - 1)
-								),
-								prestige_level: projected.prestigeLevel,
-								rank_after: rank,
-								upgrade_id: options.upgradeId,
-							});
-						} else {
-							const upgrade = RUN_UPGRADES.find(
-								(entry) => entry.id === options.upgradeId
-							);
-							track(AnalyticsEvents.game.purchaseRunUpgrade, {
-								cans_bucket: bucketCans(projected.cans),
-								cost: upgrade?.cost ?? 0,
-								upgrade_id: options.upgradeId,
-							});
-						}
-						break;
-					}
-					case "prestige": {
-						prestigeReadyTrackedRef.current = false;
-						track(AnalyticsEvents.game.prestigeConfirmed, {
-							prestige_level: before.prestigeLevel,
-							reward_golden_cans: prestigeReward(
-								before.lifetimeCans,
-								before.totalGoldenCans
-							),
-							run_cans_bucket: bucketCans(before.runCans),
-						});
-						setUserTraits({ prestige_level: projected.prestigeLevel });
-						break;
-					}
-					case "trigger_frenzy": {
-						track(AnalyticsEvents.game.frenzyStarted, {
-							cps_bucket: bucketCps(calculateCps(projected)),
-							prestige_level: projected.prestigeLevel,
-							run_cans_bucket: bucketCans(projected.runCans),
-						});
-						break;
-					}
-					default:
-						break;
+				if (options.action === "prestige") {
+					prestigeReadyTrackedRef.current = false;
 				}
+				trackMutationSuccess(options, before, projected);
 
 				return true;
 			} catch (error) {
@@ -1081,13 +1331,15 @@ export const MonsterGame = () => {
 	const buyProducerNow = useCallback(
 		(
 			producerId: ProducerId,
-			producerSource: "manual" | "smart_stocker" = "manual"
+			producerSource: "manual" | "smart_stocker" = "manual",
+			quantity = 1
 		) =>
 			performMutation(
-				(input) => buyProducerMutation({ ...input, producerId }),
+				(input) => buyProducerMutation({ ...input, producerId, quantity }),
 				{
 					action: "buy_producer",
 					producerId,
+					producerQuantity: quantity,
 					producerSource,
 				}
 			),
@@ -1120,13 +1372,48 @@ export const MonsterGame = () => {
 		[performMutation, prestigeMutation]
 	);
 
+	const claimGoldenRushNow = useCallback(async () => {
+		const rewardRef: { current: GoldenRushReward | null } = { current: null };
+		const succeeded = await performMutation(
+			async (input) => {
+				const result = await claimGoldenRushMutation(input);
+				rewardRef.current = result.reward;
+				return result.snapshot;
+			},
+			{ action: "claim_golden_rush" }
+		);
+		const reward = rewardRef.current;
+		if (!(succeeded && reward)) {
+			return;
+		}
+		if (reward.kind === "lucky") {
+			toast.success("Lucky can!", {
+				description: `+${formatGameNumber(reward.cans)} cans on the spot`,
+			});
+		} else if (reward.kind === "click_rush") {
+			toast.success("Click Rush!", {
+				description: `×${reward.multiplier} click power for ${Math.round(reward.durationMs / 1000)}s`,
+			});
+		} else {
+			toast.success("Production Frenzy!", {
+				description: `×${reward.multiplier} production for ${Math.round(reward.durationMs / 1000)}s`,
+			});
+		}
+		track(AnalyticsEvents.game.goldenRushClaimed, {
+			reward_kind: reward.kind,
+		});
+	}, [claimGoldenRushMutation, performMutation]);
+
 	useEffect(() => {
 		const timer = window.setInterval(() => {
 			const { current } = gameRef;
 			if (!current || mutationLockedRef.current) {
 				return;
 			}
-			if (current.goldenUpgrades["smart-stocker"] > 0) {
+			if (
+				isSmartStockerEnabled &&
+				current.goldenUpgrades["smart-stocker"] > 0
+			) {
 				const producerId = cheapestAffordableProducer(current, current.cans);
 				if (producerId) {
 					buyProducerNow(producerId, "smart_stocker").catch(() => undefined);
@@ -1136,7 +1423,7 @@ export const MonsterGame = () => {
 			syncNow().catch(() => undefined);
 		}, HEARTBEAT_MS);
 		return () => window.clearInterval(timer);
-	}, [buyProducerNow, syncNow]);
+	}, [buyProducerNow, isSmartStockerEnabled, syncNow]);
 
 	const playCanSound = useCallback(() => {
 		if (isMuted) {
@@ -1175,7 +1462,9 @@ export const MonsterGame = () => {
 		setClicksPerSecond(clickTimesRef.current.length);
 		const frenzyActive = (current.frenzyEndsAt ?? 0) > now;
 		const amount =
-			calculateClickValue(current) * (frenzyActive ? FRENZY_MULTIPLIER : 1);
+			calculateClickValue(current) *
+			(frenzyActive ? frenzyMultiplier(current) : 1) *
+			clickBuffMultiplier(current, now);
 		if (milestone) {
 			track(AnalyticsEvents.game.clickMilestone, {
 				click_value: amount,
@@ -1196,7 +1485,7 @@ export const MonsterGame = () => {
 				),
 				cans: clampGameValue(state.cans + amount),
 				frenzyEndsAt: triggersFrenzy
-					? now + FRENZY_DURATION_MS
+					? now + frenzyDurationMs(state)
 					: state.frenzyEndsAt,
 				lifetimeCans: clampGameValue(state.lifetimeCans + amount),
 				nextFrenzyClick,
@@ -1252,11 +1541,21 @@ export const MonsterGame = () => {
 	const toggleEsMode = useCallback(() => {
 		setIsEsMode((enabled) => !enabled);
 	}, []);
+	const toggleSmartStocker = useCallback(() => {
+		setIsSmartStockerEnabled((enabled) => {
+			track(AnalyticsEvents.ui.smartStockerToggled, { enabled: !enabled });
+			return !enabled;
+		});
+	}, []);
+	const changeBuyQuantity = useCallback((quantity: BuyQuantity) => {
+		track(AnalyticsEvents.ui.buyQuantityChanged, { quantity });
+		setBuyQuantity(quantity);
+	}, []);
 	const handleBuyProducer = useCallback(
 		(producerId: ProducerId) => {
-			buyProducerNow(producerId).catch(() => undefined);
+			buyProducerNow(producerId, "manual", buyQuantity).catch(() => undefined);
 		},
-		[buyProducerNow]
+		[buyProducerNow, buyQuantity]
 	);
 	const handleBuyUpgrade = useCallback(
 		(upgradeId: string) => {
@@ -1264,6 +1563,9 @@ export const MonsterGame = () => {
 		},
 		[buyUpgradeNow]
 	);
+	const handleClaimGoldenRush = useCallback(() => {
+		claimGoldenRushNow().catch(() => undefined);
+	}, [claimGoldenRushNow]);
 
 	if (isSessionPending || !session || isStateLoading || !game) {
 		return <GameLoading />;
@@ -1293,16 +1595,22 @@ export const MonsterGame = () => {
 				onToggleMute={toggleMute}
 			/>
 			<ShopCard
+				buyQuantity={buyQuantity}
 				game={game}
 				isSaving={isSaving}
+				isSmartStockerEnabled={isSmartStockerEnabled}
 				onBuyProducer={handleBuyProducer}
 				onBuyUpgrade={handleBuyUpgrade}
+				onChangeBuyQuantity={changeBuyQuantity}
+				onToggleSmartStocker={toggleSmartStocker}
 			/>
 			<LeaderboardCard
 				entries={leaderboardQuery.data ?? []}
 				isAnonymous={Boolean(session.user.isAnonymous)}
 				viewerId={session.user.id}
 			/>
+			<AchievementsCard game={game} />
+			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>
 	);
 };
