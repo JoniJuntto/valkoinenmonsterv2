@@ -18,6 +18,11 @@ export const gameState = pgTable("game_state", {
 		.notNull(),
 	frenzyEndsAt: timestamp("frenzy_ends_at", { withTimezone: true }),
 	goldenCans: integer("golden_cans").default(0).notNull(),
+	goldenRushBuffEndsAt: timestamp("golden_rush_buff_ends_at", {
+		withTimezone: true,
+	}),
+	goldenRushBuffKind: text("golden_rush_buff_kind"),
+	goldenRushReadyAt: timestamp("golden_rush_ready_at", { withTimezone: true }),
 	goldenUpgrades: jsonb("golden_upgrades")
 		.$type<Record<string, number>>()
 		.notNull(),

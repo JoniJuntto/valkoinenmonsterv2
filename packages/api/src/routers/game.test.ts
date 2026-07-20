@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { TRPCError } from "@trpc/server";
 
-import { FRENZY_DURATION_MS } from "../game";
+import {
+	FRENZY_DURATION_MS,
+	GOLDEN_RUSH_CLAIM_WINDOW_MS,
+	producerBulkCost,
+} from "../game";
 
 process.env.BETTER_AUTH_SECRET = "test-secret-that-is-at-least-32-chars";
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
@@ -14,6 +18,7 @@ const {
 	agentGameCommandSchema,
 	buyProducer,
 	buyUpgrade,
+	claimGoldenRush,
 	createAgentGameObservation,
 	createDefaultGameState,
 	getMutationDisposition,
@@ -65,6 +70,54 @@ describe("server-authoritative mutations", () => {
 		state.producers["pull-tab"] = 25;
 		const upgraded = buyUpgrade("pull-tab-25")(state, new Date(0));
 		expect(upgraded.runUpgrades).toContain("pull-tab-25");
+	});
+
+	test("buys producers in bulk for the summed sequential cost", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		const cost = producerBulkCost("pull-tab", 0, 10);
+		state.cans = cost - 1;
+		expect(() => buyProducer("pull-tab", 10)(state, new Date(0))).toThrow(
+			"Not enough cans"
+		);
+		state.cans = cost;
+		const purchased = buyProducer("pull-tab", 10)(state, new Date(0));
+		expect(purchased.cans).toBe(0);
+		expect(purchased.producers["pull-tab"]).toBe(10);
+	});
+
+	test("claims golden rushes only inside the spawn window", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		expect(() => claimGoldenRush(0.5)(state, new Date(0))).toThrow(
+			"The golden can is gone"
+		);
+		state.goldenRushReadyAt = new Date(1000);
+		expect(() => claimGoldenRush(0.5)(state, new Date(999))).toThrow(
+			"The golden can is gone"
+		);
+		expect(() =>
+			claimGoldenRush(0.5)(state, new Date(1001 + GOLDEN_RUSH_CLAIM_WINDOW_MS))
+		).toThrow("The golden can is gone");
+
+		const buffed = claimGoldenRush(0.5)(state, new Date(1000));
+		expect(buffed.goldenRushBuffKind).toBe("click_rush");
+		expect(buffed.goldenRushBuffEndsAt?.getTime()).toBe(16_000);
+		expect(buffed.goldenRushReadyAt?.getTime()).toBeGreaterThan(1000);
+
+		state.cans = 1_000_000;
+		state.producers["mini-fridge"] = 9;
+		const lucky = claimGoldenRush(0.1)(state, new Date(1000));
+		expect(lucky.cans).toBe(1_008_100);
+		expect(lucky.goldenRushBuffKind).toBeNull();
+	});
+
+	test("gives head-start producers on prestige", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.lifetimeCans = 4_000_000;
+		state.goldenUpgrades["head-start"] = 1;
+		const reset = prestige(state, new Date(0));
+		expect(reset.producers["pull-tab"]).toBe(10);
+		expect(reset.producers["monster-singularity"]).toBe(10);
+		expect(reset.producers["taurine-comet"]).toBe(0);
 	});
 
 	test("resets run progress while preserving permanent progress", () => {
@@ -124,6 +177,19 @@ describe("server accrual and leaderboard", () => {
 		const accrued = accrueState(state, 1, new Date(FRENZY_DURATION_MS));
 		expect(accrued.cans).toBe(81);
 		expect(accrued.frenzyEndsAt).toBeNull();
+	});
+
+	test("applies production buffs for their overlap and then clears them", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.producers["mini-fridge"] = 1;
+		state.goldenRushBuffKind = "production_frenzy";
+		state.goldenRushBuffEndsAt = new Date(5000);
+		const accrued = accrueState(state, 0, new Date(10_000));
+		// 10s at 1 CPS with 5s of ×7 production frenzy = 10 + 5 × 6 = 40
+		expect(accrued.cans).toBe(40);
+		expect(accrued.goldenRushBuffKind).toBeNull();
+		expect(accrued.goldenRushBuffEndsAt).toBeNull();
+		expect(accrued.goldenRushReadyAt?.getTime()).toBeGreaterThanOrEqual(10_000);
 	});
 
 	test("orders ties by creation time and limits results", () => {
@@ -240,6 +306,9 @@ describe("JSON agent game mode", () => {
 			cans: state.cans,
 			frenzyEndsAt: null,
 			goldenCans: state.goldenCans,
+			goldenRushBuffEndsAt: null,
+			goldenRushBuffKind: null,
+			goldenRushReadyAt: null,
 			goldenUpgrades: state.goldenUpgrades,
 			idleReport: null,
 			isAnonymous: false,
