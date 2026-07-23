@@ -1,6 +1,6 @@
 # Rybbit Analytics
 
-Site ID: `766a22932609`
+Site ID: `c7b355329e37`
 
 Client tracking uses the official Rybbit script in [`apps/web/src/routes/__root.tsx`](apps/web/src/routes/__root.tsx) (`script.js` + `data-site-id`). Custom events call `window.rybbit` after the script loads via [`RybbitProvider`](apps/web/src/components/rybbit-provider.tsx).
 
@@ -10,7 +10,7 @@ Add to server `.env` (optional but required for server-side events):
 
 ```env
 RYBBIT_API_KEY=rb_your_api_key_here
-RYBBIT_SITE_ID=766a22932609
+RYBBIT_SITE_ID=c7b355329e37
 ```
 
 Generate the API key in Rybbit: **Settings → Account → API Keys**.
@@ -57,7 +57,7 @@ Create these funnels in the Rybbit dashboard:
 
 After deploy:
 
-1. Network tab shows requests to `app.rybbit.io`
+1. Network tab shows requests to `analytics.huikaton.online`
 2. Live event stream shows `game.click.milestone` at clicks 1, 10, 100…
 3. Navigating `/` ↔ `/login` produces one pageview per navigation (SPA tracking)
 4. Sign up from anonymous session attributes pre-login events to the user ID

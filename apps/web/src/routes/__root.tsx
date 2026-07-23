@@ -53,9 +53,9 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 		],
 		scripts: [
 			{
-				"data-site-id": "766a22932609",
+				"data-site-id": "c7b355329e37",
 				defer: true,
-				src: "https://app.rybbit.io/api/script.js",
+				src: "https://analytics.huikaton.online/api/script.js",
 			},
 		],
 	}),

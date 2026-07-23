@@ -1,6 +1,6 @@
 import { env } from "@valkoinenmonsterv2/env/server";
 
-const RYBBIT_TRACK_URL = "https://app.rybbit.io/api/track";
+const RYBBIT_TRACK_URL = "https://analytics.huikaton.online/api/track";
 
 export type ServerEventProperties = Record<string, string | number | boolean>;
 
