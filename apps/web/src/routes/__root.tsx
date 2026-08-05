@@ -78,9 +78,18 @@ function RootDocument() {
 					defaultTheme="light"
 					disableTransitionOnChange
 				>
-					<div className="grid h-svh grid-rows-[auto_1fr]">
+					<div className="grid h-svh grid-rows-[auto_1fr_auto]">
 						<Header />
 						<Outlet />
+						<footer className="border-border border-t px-4 py-2 text-muted-foreground text-xs">
+							See also:{" "}
+							<a
+								className="underline underline-offset-2 hover:text-foreground"
+								href="https://visp-stream.com"
+							>
+								Visp Stream
+							</a>
+						</footer>
 					</div>
 					<Toaster richColors />
 				</ThemeProvider>
