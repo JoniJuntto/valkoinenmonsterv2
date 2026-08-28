@@ -18,6 +18,8 @@ import {
 	type GoldenRushBuffKind,
 	type GoldenUpgradeRanks,
 	getRunUpgrade,
+	isAchievementId,
+	isCanVariantId,
 	isDraftOnlyKind,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
@@ -113,11 +115,7 @@ const normalizeRunDraft = (
 	return options.length === DRAFT_SIZE ? options : null;
 };
 
-export const normalizePersistedGameState = (
-	state: GameStateRow,
-	serverNow: Date
-): MutableGameState => {
-	const serverNowMs = serverNow.getTime();
+export const normalizeCanBalances = (state: GameStateRow) => {
 	const cans = clampGameValue(state.cans);
 	const runCans = Math.max(cans, clampGameValue(state.runCans));
 	const bestRunCans = Math.max(runCans, clampGameValue(state.bestRunCans));
@@ -125,11 +123,34 @@ export const normalizePersistedGameState = (
 		bestRunCans,
 		clampGameValue(state.lifetimeCans)
 	);
+	return { bestRunCans, cans, lifetimeCans, runCans };
+};
+
+export const normalizePersistedGameState = (
+	state: GameStateRow,
+	serverNow: Date
+): MutableGameState => {
+	const serverNowMs = serverNow.getTime();
+	const { bestRunCans, cans, lifetimeCans, runCans } =
+		normalizeCanBalances(state);
 	const goldenCans = clampGameCounter(state.goldenCans);
 	const totalGoldenCans = Math.max(
 		goldenCans,
 		clampGameCounter(state.totalGoldenCans)
 	);
+	const normalizeCollection = (value: unknown): string[] => {
+		if (!Array.isArray(value)) {
+			return [];
+		}
+		return [
+			...new Set(
+				value.filter(
+					(id): id is string => typeof id === "string" && isCanVariantId(id)
+				)
+			),
+		];
+	};
+
 	const goldenUpgrades = normalizeGoldenUpgrades(state.goldenUpgrades);
 	const runUpgrades = Array.isArray(state.runUpgrades)
 		? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
@@ -160,6 +181,7 @@ export const normalizePersistedGameState = (
 		...state,
 		bestRunCans,
 		cans,
+		collection: normalizeCollection(state.collection),
 		draftTier,
 		frenzyEndsAt: normalizeTimer(
 			state.frenzyEndsAt,
@@ -196,6 +218,9 @@ export const normalizePersistedGameState = (
 		runDraft,
 		runUpgrades,
 		totalGoldenCans,
+		unlockedAchievements: Array.isArray(state.unlockedAchievements)
+			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
+			: [],
 	};
 };
 
@@ -203,6 +228,22 @@ const invariant = (condition: boolean, message: string): void => {
 	if (!condition) {
 		throw new Error(`Progression invariant failed: ${message}`);
 	}
+};
+
+const assertDraftInvariants = (state: MutableGameState): void => {
+	invariant(
+		Number.isInteger(state.draftTier) &&
+			state.draftTier >= 0 &&
+			state.draftTier <= FLAVOR_UPGRADES.length,
+		"draft tier must be within the flavor lineup"
+	);
+	invariant(
+		state.runDraft === null ||
+			(state.runDraft.length === DRAFT_SIZE &&
+				new Set(state.runDraft).size === DRAFT_SIZE &&
+				state.runDraft.every(isDraftOptionId)),
+		"run draft must offer valid draft-only upgrades"
+	);
 };
 
 export const assertProgressionInvariants = (
@@ -253,18 +294,12 @@ export const assertProgressionInvariants = (
 			state.runUpgrades.every(isRunUpgradeId),
 		"run upgrades must be known and unique"
 	);
+	assertDraftInvariants(state);
 	invariant(
-		Number.isInteger(state.draftTier) &&
-			state.draftTier >= 0 &&
-			state.draftTier <= FLAVOR_UPGRADES.length,
-		"draft tier must be within the flavor lineup"
-	);
-	invariant(
-		state.runDraft === null ||
-			(state.runDraft.length === DRAFT_SIZE &&
-				new Set(state.runDraft).size === DRAFT_SIZE &&
-				state.runDraft.every(isDraftOptionId)),
-		"run draft must offer valid draft-only upgrades"
+		state.unlockedAchievements.length ===
+			new Set(state.unlockedAchievements).size &&
+			state.unlockedAchievements.every(isAchievementId),
+		"unlocked achievements must be known and unique"
 	);
 	invariant(
 		Object.keys(state.goldenUpgrades).length === GOLDEN_UPGRADES.length &&
@@ -273,6 +308,11 @@ export const assertProgressionInvariants = (
 				return Number.isInteger(rank) && rank >= 0 && rank <= maxRank;
 			}),
 		"golden upgrade ranks must match the catalog"
+	);
+	invariant(
+		state.collection.length === new Set(state.collection).size &&
+			state.collection.every(isCanVariantId),
+		"collection variants must be known and unique"
 	);
 	invariant(
 		Number.isFinite(state.manualClickBudget) &&

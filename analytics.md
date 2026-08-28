@@ -41,6 +41,7 @@ Create these funnels in the Rybbit dashboard:
 2. **Prestige loop:** `game.prestige.ready` → `game.prestige.confirmed` → `game.purchase.golden_upgrade`
 3. **Registration:** `nav.claim_progress` → pageview `/login` → `auth.sign_up.succeeded` → `auth.account_linked`
 4. **Frenzy engagement:** `game.click.milestone` → `game.frenzy.started` → `game.frenzy.ended`
+5. **Season retention:** `game.season.viewed` → `game.season.joined` → `game.season.purchase.producer`
 
 ## Goals
 
@@ -52,6 +53,7 @@ Create these funnels in the Rybbit dashboard:
 | Account created | `auth.sign_up.succeeded` |
 | Progress claimed | `auth.account_linked` |
 | Golden upgrade | `game.purchase.golden_upgrade` |
+| Season event | `game.season.joined` |
 
 ## Verification checklist
 

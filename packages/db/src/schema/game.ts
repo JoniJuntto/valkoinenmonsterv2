@@ -4,6 +4,7 @@ import {
 	integer,
 	jsonb,
 	pgTable,
+	primaryKey,
 	text,
 	timestamp,
 } from "drizzle-orm/pg-core";
@@ -13,6 +14,7 @@ import { user } from "./auth";
 export const gameState = pgTable("game_state", {
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
+	collection: jsonb("collection").$type<string[]>().notNull().default([]),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
@@ -44,6 +46,10 @@ export const gameState = pgTable("game_state", {
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
 	totalGoldenCans: doublePrecision("total_golden_cans").default(0).notNull(),
+	unlockedAchievements: jsonb("unlocked_achievements")
+		.$type<string[]>()
+		.default([])
+		.notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true })
 		.defaultNow()
 		.$onUpdate(() => new Date())
@@ -54,3 +60,37 @@ export const gameState = pgTable("game_state", {
 });
 
 export type GameStateRow = typeof gameState.$inferSelect;
+
+export const seasonState = pgTable(
+	"season_state",
+	{
+		cans: doublePrecision("cans").default(0).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		lastAccruedAt: timestamp("last_accrued_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		lastOperationId: text("last_operation_id"),
+		manualClickBudget: doublePrecision("manual_click_budget")
+			.default(20)
+			.notNull(),
+		producers: jsonb("producers").$type<Record<string, number>>().notNull(),
+		revision: integer("revision").default(0).notNull(),
+		score: doublePrecision("score").default(0).notNull(),
+		seasonId: text("season_id").notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.$onUpdate(() => new Date())
+			.notNull(),
+		upgrades: jsonb("upgrades").$type<string[]>().notNull(),
+		userId: text("user_id")
+			.references(() => user.id, { onDelete: "cascade" })
+			.notNull(),
+	},
+	(table) => ({
+		pk: primaryKey({ columns: [table.userId, table.seasonId] }),
+	})
+);
+
+export type SeasonStateRow = typeof seasonState.$inferSelect;

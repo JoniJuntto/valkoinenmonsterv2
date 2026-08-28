@@ -1,5 +1,6 @@
 import { protectedProcedure, publicProcedure, router } from "../index";
 import { gameRouter, leaderboardRouter } from "./game";
+import { seasonRouter } from "./season";
 
 export const appRouter = router({
 	game: gameRouter,
@@ -9,5 +10,6 @@ export const appRouter = router({
 		message: "This is private",
 		user: ctx.session.user,
 	})),
+	season: seasonRouter,
 });
 export type AppRouter = typeof appRouter;

@@ -21,6 +21,8 @@ export const AnalyticsEvents = {
 	game: {
 		achievementUnlocked: "game.achievement.unlocked",
 		clickMilestone: "game.click.milestone",
+		codexSetCompleted: "game.codex.set_completed",
+		codexVariantUnlocked: "game.codex.variant_unlocked",
 		draftPicked: "game.draft.picked",
 		error: "game.error",
 		frenzyEnded: "game.frenzy.ended",
@@ -39,6 +41,13 @@ export const AnalyticsEvents = {
 	nav: {
 		claimProgress: "nav.claim_progress",
 		logoClicked: "nav.logo_clicked",
+	},
+	season: {
+		bannerClicked: "game.season.banner_clicked",
+		purchaseProducer: "game.season.purchase.producer",
+		purchaseUpgrade: "game.season.purchase.upgrade",
+		tap: "game.season.tap",
+		viewed: "game.season.viewed",
 	},
 	ui: {
 		audioToggled: "ui.audio_toggled",

@@ -16,8 +16,13 @@ process.env.DATABASE_URL = testDatabaseUrl;
 const { connectTestDatabase, deleteTestUsers, seedTestUser } = await import(
 	"@valkoinenmonsterv2/db/test-database"
 );
-const { createDefaultGameState, mutateGameStateWithState, prestige } =
-	await import("./game");
+const {
+	buyUpgrade,
+	createDefaultGameState,
+	mutateGameStateWithState,
+	pickDraft,
+	prestige,
+} = await import("./game");
 
 const connection = connectTestDatabase();
 const { database } = connection;
@@ -224,6 +229,54 @@ describe("PostgreSQL game mutation contract", () => {
 			expect(save?.goldenRushBuffKind).toBe("production_frenzy");
 			expect(save?.goldenRushBuffEndsAt).toEqual(state.goldenRushBuffEndsAt);
 			expect(save?.shadowBanned).toBe(true);
+		} finally {
+			await deleteTestUsers(database, [userId]);
+		}
+	});
+
+	test("persists codex unlocks through draft picks and prestige", async () => {
+		const userId = await seedTestUser(database);
+		try {
+			const now = new Date();
+			const seeded = createDefaultGameState(userId, now);
+			seeded.cans = 2_000_000;
+			seeded.runCans = 2_000_000;
+			seeded.bestRunCans = 2_000_000;
+			seeded.lifetimeCans = 4_000_000;
+			await database.insert(gameState).values(seeded);
+
+			// Flavors are draft-only now: reaching the tier cost rolls a draft and
+			// picking the flavor card must unlock the codex variant.
+			const rolled = await mutateGameStateWithState(
+				database,
+				userId,
+				false,
+				mutationInput(0)
+			);
+			expect(rolled.snapshot.runDraft?.[0]).toBe("ultra-white");
+			await mutateGameStateWithState(
+				database,
+				userId,
+				false,
+				mutationInput(rolled.snapshot.revision),
+				pickDraft(0)
+			);
+			const save = await readSave(userId);
+			expect(save?.collection).toContain("ultra-white");
+
+			await mutateGameStateWithState(
+				database,
+				userId,
+				false,
+				mutationInput(save?.revision ?? 0),
+				prestige
+			);
+			const afterPrestige = await readSave(userId);
+			expect(afterPrestige?.runUpgrades).toEqual([]);
+			expect(afterPrestige?.collection).toContain("ultra-white");
+			expect(afterPrestige?.collection).toContain("world-1");
+			expect(afterPrestige?.collection).not.toContain("world-5");
+			expect(afterPrestige?.prestigeLevel).toBe(1);
 		} finally {
 			await deleteTestUsers(database, [userId]);
 		}

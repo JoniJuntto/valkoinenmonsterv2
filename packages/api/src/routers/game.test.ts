@@ -6,6 +6,7 @@ import {
 	FRENZY_DURATION_MS,
 	frenzyDurationMs,
 	GOLDEN_RUSH_CLAIM_WINDOW_MS,
+	GOLDEN_RUSH_DROP_CHANCE,
 	producerBulkCost,
 } from "../game";
 
@@ -220,6 +221,24 @@ describe("server-authoritative mutations", () => {
 		);
 	});
 
+	test("rolls codex drops from golden rush claims", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.goldenRushReadyAt = new Date(1000);
+		const dropped = claimGoldenRush(0.1, 0.1)(state, new Date(1000));
+		expect(dropped.collection).toEqual(["golden-flash"]);
+		const owned = { ...state, collection: ["golden-flash", "golden-storm"] };
+		const duplicate = claimGoldenRush(0.1, 0.1)(owned, new Date(1000));
+		expect(duplicate.collection).toEqual(["golden-flash", "golden-storm"]);
+		const missed = claimGoldenRush(0.1, GOLDEN_RUSH_DROP_CHANCE)(
+			state,
+			new Date(1000)
+		);
+		expect(missed.collection).toEqual([]);
+		const rushDrop = claimGoldenRush(0.5, 0.1)(state, new Date(1000));
+		expect(rushDrop.goldenRushBuffKind).toBe("click_rush");
+		expect(rushDrop.collection).toEqual(["golden-storm"]);
+	});
+
 	test("gives head-start producers on prestige", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.lifetimeCans = 4_000_000;
@@ -427,9 +446,11 @@ describe("JSON agent game mode", () => {
 		const stocked = createDefaultGameState("stocked", now);
 		stocked.cans = 1000;
 		stocked.goldenUpgrades["smart-stocker"] = 1;
+		// Tick 1: Mini Fridge (100 cans, 1 CPS) beats Pull Tab (15, 0.1 CPS) on
+		// value; tick 2 accrues 5 cans of production, then buys Fridge #2 (115).
 		const autoPurchased = advanceOpenState(stocked, 10_000, now);
-		expect(autoPurchased.producers["pull-tab"]).toBe(2);
-		expect(autoPurchased.cans).toBe(968.5);
+		expect(autoPurchased.producers["mini-fridge"]).toBe(2);
+		expect(autoPurchased.cans).toBe(791);
 	});
 
 	test("rebases simulated Golden Rush timers to real server time", () => {
@@ -493,6 +514,7 @@ describe("JSON agent game mode", () => {
 			runUpgrades: state.runUpgrades,
 			serverNow: 0,
 			totalGoldenCans: state.totalGoldenCans,
+			unlockedAchievements: state.unlockedAchievements,
 		};
 		const observation = createAgentGameObservation(state, snapshot, [], {
 			action: "observe",

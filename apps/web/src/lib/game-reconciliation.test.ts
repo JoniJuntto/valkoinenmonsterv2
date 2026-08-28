@@ -19,6 +19,7 @@ const createSnapshot = (
 ): GameSnapshot => ({
 	bestRunCans: 0,
 	cans: 0,
+	collection: [],
 	draftTier: 0,
 	frenzyEndsAt: null,
 	goldenCans: 0,
@@ -40,6 +41,7 @@ const createSnapshot = (
 	runUpgrades: [],
 	serverNow: 1000,
 	totalGoldenCans: 0,
+	unlockedAchievements: [],
 	...overrides,
 });
 

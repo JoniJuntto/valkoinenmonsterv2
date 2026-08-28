@@ -1,0 +1,1 @@
+ALTER TABLE "game_state" ADD COLUMN "unlocked_achievements" jsonb DEFAULT '[]'::jsonb NOT NULL;

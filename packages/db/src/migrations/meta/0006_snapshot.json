@@ -1,6 +1,6 @@
 {
-  "id": "0a84d17c-09f2-4176-ad1d-b47b9062f87d",
-  "prevId": "13666888-7b2c-4c75-9072-4d1f86b6b03a",
+  "id": "93ccd18e-19b7-4535-aae7-e1eb6527b72d",
+  "prevId": "b978b6eb-2358-4b4f-8c49-d5aaa04cfdb9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -372,12 +372,26 @@
           "notNull": true,
           "default": 0
         },
+        "collection": {
+          "name": "collection",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "draft_tier": {
+          "name": "draft_tier",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "frenzy_ends_at": {
           "name": "frenzy_ends_at",
@@ -476,6 +490,12 @@
           "notNull": true,
           "default": 0
         },
+        "run_draft": {
+          "name": "run_draft",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "run_upgrades": {
           "name": "run_upgrades",
           "type": "jsonb",
@@ -530,6 +550,113 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.season_state": {
+      "name": "season_state",
+      "schema": "",
+      "columns": {
+        "cans": {
+          "name": "cans",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_accrued_at": {
+          "name": "last_accrued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_operation_id": {
+          "name": "last_operation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "manual_click_budget": {
+          "name": "manual_click_budget",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 20
+        },
+        "producers": {
+          "name": "producers",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "score": {
+          "name": "score",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "season_id": {
+          "name": "season_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "upgrades": {
+          "name": "upgrades",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "season_state_user_id_user_id_fk": {
+          "name": "season_state_user_id_user_id_fk",
+          "tableFrom": "season_state",
+          "tableTo": "user",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "season_state_user_id_season_id_pk": {
+          "name": "season_state_user_id_season_id_pk",
+          "columns": ["user_id", "season_id"]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
