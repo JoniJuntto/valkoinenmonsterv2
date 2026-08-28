@@ -38,6 +38,7 @@ const createSnapshot = (
 	runUpgrades: [],
 	serverNow: 1000,
 	totalGoldenCans: 0,
+	unlockedAchievements: [],
 	...overrides,
 });
 

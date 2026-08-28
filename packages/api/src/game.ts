@@ -364,8 +364,11 @@ export interface GameProgress {
 }
 
 export interface AchievementProgress extends GameProgress {
+	bestRunCans?: number;
+	goldenCans?: number;
 	lifetimeCans?: number;
 	prestigeLevel?: number;
+	unlockedAchievements?: string[];
 }
 
 export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
@@ -388,6 +391,7 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	revision: number;
 	runCans: number;
 	serverNow: number;
+	unlockedAchievements: string[];
 }
 
 const producerIds = new Set<string>(PRODUCERS.map(({ id }) => id));
@@ -598,6 +602,12 @@ const LIFETIME_ACHIEVEMENT_TIERS = [
 	{ name: "Sextillion Surge", threshold: 1e21 },
 	{ name: "Septillion Slam", threshold: 1e24 },
 	{ name: "Octillion Overdrive", threshold: 1e27 },
+	{ name: "Nonillion Nightcap", threshold: 1e30 },
+	{ name: "Undecillion Uproar", threshold: 1e36 },
+	{ name: "Tredecillion Tsunami", threshold: 1e42 },
+	{ name: "Heat Death Hydration", threshold: 1e50 },
+	{ name: "Novemdecillion Nirvana", threshold: 1e60 },
+	{ name: "Googol Guzzler", threshold: 1e100 },
 ] as const;
 
 const PRODUCER_COUNT_ACHIEVEMENT_TIERS = [
@@ -608,6 +618,8 @@ const PRODUCER_COUNT_ACHIEVEMENT_TIERS = [
 	{ name: "Beverage Baron", threshold: 500 },
 	{ name: "Can Cartel", threshold: 1000 },
 	{ name: "Galactic Grocer", threshold: 2500 },
+	{ name: "Planetary Distribution", threshold: 5000 },
+	{ name: "Ten Thousand Tabs", threshold: 10_000 },
 ] as const;
 
 const PRESTIGE_ACHIEVEMENT_TIERS = [
@@ -618,6 +630,11 @@ const PRESTIGE_ACHIEVEMENT_TIERS = [
 	{ name: "Double Digits", threshold: 10 },
 	{ name: "Ascension Addict", threshold: 15 },
 	{ name: "Beyond the Beast", threshold: 20 },
+	{ name: "Silver Ascendant", threshold: 25 },
+	{ name: "Ascension Architect", threshold: 30 },
+	{ name: "Beast Reborn", threshold: 40 },
+	{ name: "Half-Century Saint", threshold: 50 },
+	{ name: "Centurion of Cans", threshold: 100 },
 ] as const;
 
 const GOLDEN_CAN_ACHIEVEMENT_TIERS = [
@@ -625,6 +642,9 @@ const GOLDEN_CAN_ACHIEVEMENT_TIERS = [
 	{ name: "Golden Vault", threshold: 1000 },
 	{ name: "Golden Hoard", threshold: 100_000 },
 	{ name: "Golden Singularity", threshold: 1_000_000 },
+	{ name: "Golden Galaxy", threshold: 1e8 },
+	{ name: "Golden Dimension", threshold: 1e9 },
+	{ name: "Golden Overflow", threshold: 2e9 },
 ] as const;
 
 const RUN_UPGRADE_ACHIEVEMENT_TIERS = [
@@ -632,11 +652,75 @@ const RUN_UPGRADE_ACHIEVEMENT_TIERS = [
 	{ name: "Connoisseur", threshold: 25 },
 	{ name: "Completionist", threshold: 50 },
 	{ name: "Kitchen Sink", threshold: 100 },
+	{ name: "Shelf Emptier", threshold: 150 },
+	{ name: "Nothing Left to Buy", threshold: RUN_UPGRADES.length },
 ] as const;
 
 const CENTURY_ACHIEVEMENT_THRESHOLD = 100;
+const ENDGAME_PRODUCER_THRESHOLD = MILESTONES.at(-1) ?? 300;
+const GOLDEN_HOARD_THRESHOLD = 100_000;
+const PERFECT_RUN_THRESHOLD = 1e24;
+const finalProducer = PRODUCERS.at(-1) ?? PRODUCERS[0];
 
-export const ACHIEVEMENTS: AchievementDefinition[] = [
+const isGoldenUpgradeMaxed = (
+	progress: AchievementProgress,
+	id: GoldenUpgradeId
+): boolean =>
+	progress.goldenUpgrades[id] >= (goldenUpgradeById.get(id)?.maxRank ?? 1);
+
+const ENDGAME_ACHIEVEMENTS: AchievementDefinition[] = [
+	{
+		description: `Own ${ENDGAME_PRODUCER_THRESHOLD}× ${finalProducer.name}`,
+		id: "beast-legion",
+		isUnlocked: (progress) =>
+			progress.producers[finalProducer.id] >= ENDGAME_PRODUCER_THRESHOLD,
+		name: "Beast Legion",
+	},
+	{
+		description: `Own ${ENDGAME_PRODUCER_THRESHOLD}× of every producer at once`,
+		id: "maxed-lineup",
+		isUnlocked: (progress) =>
+			PRODUCERS.every(
+				({ id }) => progress.producers[id] >= ENDGAME_PRODUCER_THRESHOLD
+			),
+		name: "Maxed Lineup",
+	},
+	{
+		description: "Max out Overcharge Core",
+		id: "overcharge-max",
+		isUnlocked: (progress) => isGoldenUpgradeMaxed(progress, "overcharge-core"),
+		name: "Overcharged",
+	},
+	{
+		description: "Max out Frenzy Core",
+		id: "frenzy-core-max",
+		isUnlocked: (progress) => isGoldenUpgradeMaxed(progress, "frenzy-core"),
+		name: "Frenzy Incarnate",
+	},
+	{
+		description: "Max out every golden upgrade",
+		id: "golden-perfection",
+		isUnlocked: (progress) =>
+			GOLDEN_UPGRADES.every(({ id }) => isGoldenUpgradeMaxed(progress, id)),
+		name: "Golden Perfection",
+	},
+	{
+		description: `Hold ${formatGameNumber(GOLDEN_HOARD_THRESHOLD)} unspent golden cans`,
+		id: "golden-dragon",
+		isUnlocked: (progress) =>
+			(progress.goldenCans ?? 0) >= GOLDEN_HOARD_THRESHOLD,
+		name: "Golden Dragon",
+	},
+	{
+		description: `Earn ${formatGameNumber(PERFECT_RUN_THRESHOLD)} cans in a single run`,
+		id: "perfect-run",
+		isUnlocked: (progress) =>
+			(progress.bestRunCans ?? 0) >= PERFECT_RUN_THRESHOLD,
+		name: "One Perfect Run",
+	},
+];
+
+const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
 	...LIFETIME_ACHIEVEMENT_TIERS.map(({ name, threshold }) => ({
 		description: `Earn ${formatGameNumber(threshold)} lifetime cans`,
 		id: `lifetime-${threshold.toExponential(0)}`,
@@ -679,7 +763,29 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
 			progress.runUpgrades.length >= threshold,
 		name,
 	})),
+	...ENDGAME_ACHIEVEMENTS,
 ];
+
+// ponytail: unlocks are permanent, so a prestige reset never takes the bonus back
+export const ACHIEVEMENTS: AchievementDefinition[] =
+	ACHIEVEMENT_DEFINITIONS.map((achievement) => ({
+		...achievement,
+		isUnlocked: (progress: AchievementProgress) =>
+			progress.unlockedAchievements?.includes(achievement.id) === true ||
+			achievement.isUnlocked(progress),
+	}));
+
+const achievementIds = new Set(ACHIEVEMENTS.map(({ id }) => id));
+
+export const isAchievementId = (value: unknown): value is string =>
+	typeof value === "string" && achievementIds.has(value);
+
+export const unlockedAchievementIds = (
+	progress: AchievementProgress
+): string[] =>
+	ACHIEVEMENTS.filter((achievement) => achievement.isUnlocked(progress)).map(
+		({ id }) => id
+	);
 
 export const countUnlockedAchievements = (
 	progress: AchievementProgress

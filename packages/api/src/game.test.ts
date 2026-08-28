@@ -34,6 +34,7 @@ import {
 	RUN_UPGRADES,
 	rollGoldenRushDelayMs,
 	rollGoldenRushReward,
+	unlockedAchievementIds,
 } from "./game";
 
 const createProgress = (): GameProgress => ({
@@ -233,6 +234,19 @@ describe("Monster game economy", () => {
 				prestigeLevel: 3,
 			})
 		).toBe(8);
+	});
+
+	test("keeps unlocked achievements through a prestige reset", () => {
+		const progress = createProgress();
+		progress.producers["pull-tab"] = 100;
+		const unlocked = unlockedAchievementIds(progress);
+		expect(unlocked).toHaveLength(4);
+		const afterPrestige = {
+			...createProgress(),
+			unlockedAchievements: unlocked,
+		};
+		expect(countUnlockedAchievements(afterPrestige)).toBe(4);
+		expect(unlockedAchievementIds(afterPrestige)).toEqual(unlocked);
 	});
 });
 

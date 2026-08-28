@@ -374,6 +374,7 @@ describe("JSON agent game mode", () => {
 			runUpgrades: state.runUpgrades,
 			serverNow: 0,
 			totalGoldenCans: state.totalGoldenCans,
+			unlockedAchievements: state.unlockedAchievements,
 		};
 		const observation = createAgentGameObservation(state, snapshot, [], {
 			action: "observe",

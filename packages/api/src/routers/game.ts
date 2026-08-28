@@ -47,6 +47,7 @@ import {
 	randomFrenzyThreshold,
 	rollGoldenRushDelayMs,
 	rollGoldenRushReward,
+	unlockedAchievementIds,
 } from "../game";
 import {
 	assertProgressionInvariants,
@@ -146,6 +147,7 @@ export const createDefaultGameState = (
 		nextFrenzyClick: randomFrenzyThreshold(progress, secureRandom()),
 		revision: 0,
 		shadowBanned: false,
+		unlockedAchievements: [],
 		updatedAt: now,
 	};
 };
@@ -298,6 +300,7 @@ const toSnapshot = (
 	runUpgrades: state.runUpgrades,
 	serverNow,
 	totalGoldenCans: state.totalGoldenCans,
+	unlockedAchievements: state.unlockedAchievements,
 });
 
 interface GameMutationResult {
@@ -336,7 +339,11 @@ export const mutateGameStateWithState = async (
 		input.pendingManualClicks,
 		now
 	);
-	const mutated = mutation(accrual.state, now);
+	const applied = mutation(accrual.state, now);
+	const mutated = {
+		...applied,
+		unlockedAchievements: unlockedAchievementIds(applied),
+	};
 	assertProgressionInvariants(mutated, now);
 	const [saved] = await database
 		.update(gameState)

@@ -36,6 +36,7 @@ const createRow = (): GameStateRow => ({
 	runUpgrades: [],
 	shadowBanned: false,
 	totalGoldenCans: 0,
+	unlockedAchievements: [],
 	updatedAt: new Date(0),
 	userId: "user",
 });
