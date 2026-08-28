@@ -5,6 +5,7 @@ import {
 	CLICK_RUSH_DURATION_MS,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	FLAVOR_UPGRADES,
 	FRENZY_DURATION_MS,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	MAX_MANUAL_CLICK_BUDGET,
@@ -18,6 +19,7 @@ const createRow = (): GameStateRow => ({
 	bestRunCans: 0,
 	cans: 0,
 	createdAt: new Date(0),
+	draftTier: 0,
 	frenzyEndsAt: null,
 	goldenCans: 0,
 	goldenRushBuffEndsAt: null,
@@ -33,6 +35,7 @@ const createRow = (): GameStateRow => ({
 	producers: createInitialProducers(),
 	revision: 0,
 	runCans: 0,
+	runDraft: null,
 	runUpgrades: [],
 	shadowBanned: false,
 	totalGoldenCans: 0,
@@ -106,6 +109,32 @@ describe("persisted game state", () => {
 		const malformed = normalizePersistedGameState(row, now);
 		expect(malformed.goldenRushBuffKind).toBeNull();
 		expect(malformed.goldenRushBuffEndsAt).toBeNull();
+	});
+
+	test("repairs malformed drafts and keeps valid ones", () => {
+		const row = createRow();
+		row.draftTier = 2;
+		row.runDraft = ["ultra-rosa", "garbage", "draft-frenzy-chug"];
+		const repaired = normalizePersistedGameState(row, new Date(0));
+		expect(repaired.draftTier).toBe(2);
+		expect(repaired.runDraft).toBeNull();
+
+		row.runDraft = ["ultra-rosa", "draft-spare-pull-tabs", "draft-frenzy-chug"];
+		const valid = normalizePersistedGameState(row, new Date(0));
+		expect(valid.runDraft).toEqual([
+			"ultra-rosa",
+			"draft-spare-pull-tabs",
+			"draft-frenzy-chug",
+		]);
+
+		row.draftTier = 10_000;
+		row.runDraft = ["ultra-rosa", "garbage", "draft-frenzy-chug"];
+		const exhausted = normalizePersistedGameState(row, new Date(0));
+		expect(exhausted.draftTier).toBe(FLAVOR_UPGRADES.length);
+		expect(exhausted.runDraft).toBeNull();
+		expect(() =>
+			assertProgressionInvariants(exhausted, new Date(0))
+		).not.toThrow();
 	});
 
 	test("rejects transition states that break progression ordering", () => {

@@ -16,6 +16,7 @@ export const gameState = pgTable("game_state", {
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
+	draftTier: integer("draft_tier").default(0).notNull(),
 	frenzyEndsAt: timestamp("frenzy_ends_at", { withTimezone: true }),
 	goldenCans: doublePrecision("golden_cans").default(0).notNull(),
 	goldenRushBuffEndsAt: timestamp("golden_rush_buff_ends_at", {
@@ -39,6 +40,7 @@ export const gameState = pgTable("game_state", {
 	producers: jsonb("producers").$type<Record<string, number>>().notNull(),
 	revision: integer("revision").default(0).notNull(),
 	runCans: doublePrecision("run_cans").default(0).notNull(),
+	runDraft: jsonb("run_draft").$type<string[]>(),
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
 	totalGoldenCans: doublePrecision("total_golden_cans").default(0).notNull(),

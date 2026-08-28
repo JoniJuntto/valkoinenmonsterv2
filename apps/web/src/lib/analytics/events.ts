@@ -21,6 +21,7 @@ export const AnalyticsEvents = {
 	game: {
 		achievementUnlocked: "game.achievement.unlocked",
 		clickMilestone: "game.click.milestone",
+		draftPicked: "game.draft.picked",
 		error: "game.error",
 		frenzyEnded: "game.frenzy.ended",
 		frenzyStarted: "game.frenzy.started",

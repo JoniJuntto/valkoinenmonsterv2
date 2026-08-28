@@ -130,11 +130,18 @@ export type ProducerCounts = Record<ProducerId, number>;
 export const ORIGINAL_PRODUCER_LINEUP_SIZE = 10;
 export const HEAD_START_COUNTS = [0, 10, 25, 50, 100] as const;
 
-export type RunUpgradeKind = "click" | "cps-click" | "flavor" | "milestone";
+export type RunUpgradeKind =
+	| "click"
+	| "cps-click"
+	| "flavor"
+	| "milestone"
+	| "grant"
+	| "frenzy-duration";
 
 export interface RunUpgradeDefinition {
 	cost: number;
 	description: string;
+	grantQuantity?: number;
 	id: string;
 	kind: RunUpgradeKind;
 	name: string;
@@ -245,6 +252,63 @@ export const RUN_UPGRADES: RunUpgradeDefinition[] = [
 	...FLAVOR_UPGRADES,
 	...milestoneUpgrades,
 ];
+
+export const DRAFT_SIZE = 3;
+export const FRENZY_DRAFT_BONUS_MS = 10_000;
+
+// Cards only offered in flavor-tier drafts; never sold in the shop.
+export const DRAFT_CARDS: RunUpgradeDefinition[] = [
+	{
+		cost: 0,
+		description: "Gain 5 Pull Tab producers",
+		grantQuantity: 5,
+		id: "draft-spare-pull-tabs",
+		kind: "grant",
+		name: "Spare Pull Tabs",
+		producerId: "pull-tab",
+	},
+	{
+		cost: 0,
+		description: "Gain 3 Mini Fridge producers",
+		grantQuantity: 3,
+		id: "draft-fridge-restock",
+		kind: "grant",
+		name: "Fridge Restock",
+		producerId: "mini-fridge",
+	},
+	{
+		cost: 0,
+		description: "+10 seconds to every frenzy this run",
+		id: "draft-frenzy-chug",
+		kind: "frenzy-duration",
+		name: "Frenzy Chug",
+	},
+];
+
+export const isDraftOnlyKind = (kind: RunUpgradeKind): boolean =>
+	kind === "flavor" || kind === "grant" || kind === "frenzy-duration";
+
+// The draft always offers the tier's flavor (strong, costs the tier price)
+// plus two random distinct free cards from the niche pool.
+export const rollDraftOptions = (
+	tier: number,
+	random: () => number
+): string[] => {
+	const flavor = FLAVOR_UPGRADES[Math.max(0, tier)];
+	if (!flavor) {
+		return [];
+	}
+	const niche = [...DRAFT_CARDS];
+	const picked: string[] = [];
+	for (let count = 0; count < DRAFT_SIZE - 1 && niche.length > 0; count += 1) {
+		const index = Math.floor(random() * niche.length);
+		const [card] = niche.splice(index, 1);
+		if (card) {
+			picked.push(card.id);
+		}
+	}
+	return [flavor.id, ...picked];
+};
 
 export const GOLDEN_UPGRADES = [
 	{
@@ -371,6 +435,7 @@ export interface AchievementProgress extends GameProgress {
 export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	bestRunCans: number;
 	cans: number;
+	draftTier: number;
 	frenzyEndsAt: number | null;
 	goldenCans: number;
 	goldenRushReadyAt: number | null;
@@ -387,12 +452,13 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	prestigeLevel: number;
 	revision: number;
 	runCans: number;
+	runDraft: string[] | null;
 	serverNow: number;
 }
 
 const producerIds = new Set<string>(PRODUCERS.map(({ id }) => id));
 const runUpgradeById = new Map(
-	RUN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
+	[...RUN_UPGRADES, ...DRAFT_CARDS].map((upgrade) => [upgrade.id, upgrade])
 );
 const goldenUpgradeById = new Map(
 	GOLDEN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
@@ -541,12 +607,12 @@ export const goldenUpgradeCost = (
 const hasRunUpgrade = (progress: GameProgress, id: string): boolean =>
 	progress.runUpgrades.includes(id);
 
-const countRunUpgradesOfKind = (
-	progress: GameProgress,
+export const countRunUpgradesOfKind = (
+	runUpgrades: string[],
 	kind: RunUpgradeKind
 ): number => {
 	let count = 0;
-	for (const id of progress.runUpgrades) {
+	for (const id of runUpgrades) {
 		if (runUpgradeById.get(id)?.kind === kind) {
 			count += 1;
 		}
@@ -706,7 +772,7 @@ export const calculateProductionCps = (
 			progress.producers[producer.id] *
 			producerMultiplier(progress, producer.id);
 	}
-	producerCps *= 2 ** countRunUpgradesOfKind(progress, "flavor");
+	producerCps *= 2 ** countRunUpgradesOfKind(progress.runUpgrades, "flavor");
 	producerCps *= 1 + progress.goldenUpgrades["endless-chill"] * 0.15;
 	producerCps *=
 		1 + Math.max(0, progress.totalGoldenCans) * GOLDEN_CAN_PRODUCTION_BONUS;
@@ -717,9 +783,11 @@ export const calculateProductionCps = (
 
 export const calculateClickValue = (progress: AchievementProgress): number => {
 	const clickBase =
-		CLICK_UPGRADE_MULTIPLIER ** countRunUpgradesOfKind(progress, "click");
+		CLICK_UPGRADE_MULTIPLIER **
+		countRunUpgradesOfKind(progress.runUpgrades, "click");
 	const cpsPercent =
-		countRunUpgradesOfKind(progress, "cps-click") * CPS_CLICK_PERCENT;
+		countRunUpgradesOfKind(progress.runUpgrades, "cps-click") *
+		CPS_CLICK_PERCENT;
 	const gripMultiplier = 1 + progress.goldenUpgrades["golden-grip"] * 0.25;
 	return clampGameValue(
 		(clickBase + calculateProductionCps(progress) * cpsPercent) * gripMultiplier
@@ -739,7 +807,9 @@ export const frenzyMultiplier = (progress: GameProgress): number =>
 export const frenzyDurationMs = (progress: GameProgress): number =>
 	FRENZY_DURATION_MS +
 	Math.max(0, progress.goldenUpgrades["frenzy-chronometer"]) *
-		FRENZY_CHRONOMETER_BONUS_MS;
+		FRENZY_CHRONOMETER_BONUS_MS +
+	countRunUpgradesOfKind(progress.runUpgrades, "frenzy-duration") *
+		FRENZY_DRAFT_BONUS_MS;
 
 export const offlineProductionMultiplier = (progress: GameProgress): number =>
 	OFFLINE_PRODUCTION_MULTIPLIER *

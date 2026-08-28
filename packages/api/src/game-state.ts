@@ -4,15 +4,21 @@ import {
 	CLICK_RUSH_DURATION_MS,
 	clampGameCounter,
 	clampGameValue,
+	countRunUpgradesOfKind,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	DRAFT_SIZE,
+	FLAVOR_UPGRADES,
 	FRENZY_CHRONOMETER_BONUS_MS,
+	FRENZY_DRAFT_BONUS_MS,
 	FRENZY_DURATION_MS,
 	type GameProgress,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_UPGRADES,
 	type GoldenRushBuffKind,
 	type GoldenUpgradeRanks,
+	getRunUpgrade,
+	isDraftOnlyKind,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
 	MAX_GAME_VALUE,
@@ -85,6 +91,28 @@ const normalizeTimer = (
 		: value;
 };
 
+const isDraftOptionId = (id: string): boolean => {
+	const card = getRunUpgrade(id);
+	return card !== undefined && isDraftOnlyKind(card.kind);
+};
+
+const normalizeRunDraft = (
+	value: unknown,
+	draftTier: number
+): string[] | null => {
+	if (!Array.isArray(value) || draftTier >= FLAVOR_UPGRADES.length) {
+		return null;
+	}
+	const options = [
+		...new Set(
+			value.filter(
+				(id): id is string => typeof id === "string" && isDraftOptionId(id)
+			)
+		),
+	];
+	return options.length === DRAFT_SIZE ? options : null;
+};
+
 export const normalizePersistedGameState = (
 	state: GameStateRow,
 	serverNow: Date
@@ -103,6 +131,19 @@ export const normalizePersistedGameState = (
 		clampGameCounter(state.totalGoldenCans)
 	);
 	const goldenUpgrades = normalizeGoldenUpgrades(state.goldenUpgrades);
+	const runUpgrades = Array.isArray(state.runUpgrades)
+		? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
+		: [];
+	const draftTier = Math.min(
+		FLAVOR_UPGRADES.length,
+		clampGameCounter(state.draftTier)
+	);
+	const runDraft = normalizeRunDraft(state.runDraft, draftTier);
+	const frenzyHorizonMs =
+		FRENZY_DURATION_MS +
+		goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
+		countRunUpgradesOfKind(runUpgrades, "frenzy-duration") *
+			FRENZY_DRAFT_BONUS_MS;
 	const goldenRushBuffKind =
 		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
 			? state.goldenRushBuffKind
@@ -119,11 +160,11 @@ export const normalizePersistedGameState = (
 		...state,
 		bestRunCans,
 		cans,
+		draftTier,
 		frenzyEndsAt: normalizeTimer(
 			state.frenzyEndsAt,
 			serverNowMs,
-			FRENZY_DURATION_MS +
-				goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS
+			frenzyHorizonMs
 		),
 		goldenCans,
 		goldenRushBuffEndsAt,
@@ -152,9 +193,8 @@ export const normalizePersistedGameState = (
 		producers: normalizeProducers(state.producers),
 		revision: clampGameCounter(state.revision),
 		runCans,
-		runUpgrades: Array.isArray(state.runUpgrades)
-			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
-			: [],
+		runDraft,
+		runUpgrades,
 		totalGoldenCans,
 	};
 };
@@ -214,6 +254,19 @@ export const assertProgressionInvariants = (
 		"run upgrades must be known and unique"
 	);
 	invariant(
+		Number.isInteger(state.draftTier) &&
+			state.draftTier >= 0 &&
+			state.draftTier <= FLAVOR_UPGRADES.length,
+		"draft tier must be within the flavor lineup"
+	);
+	invariant(
+		state.runDraft === null ||
+			(state.runDraft.length === DRAFT_SIZE &&
+				new Set(state.runDraft).size === DRAFT_SIZE &&
+				state.runDraft.every(isDraftOptionId)),
+		"run draft must offer valid draft-only upgrades"
+	);
+	invariant(
 		Object.keys(state.goldenUpgrades).length === GOLDEN_UPGRADES.length &&
 			GOLDEN_UPGRADES.every(({ id, maxRank }) => {
 				const rank = state.goldenUpgrades[id];
@@ -245,7 +298,9 @@ export const assertProgressionInvariants = (
 	const maximumFrenzyEnd =
 		serverNowMs +
 		FRENZY_DURATION_MS +
-		state.goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS;
+		state.goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
+		countRunUpgradesOfKind(state.runUpgrades, "frenzy-duration") *
+			FRENZY_DRAFT_BONUS_MS;
 	invariant(
 		state.frenzyEndsAt === null ||
 			(validDate(state.frenzyEndsAt) &&

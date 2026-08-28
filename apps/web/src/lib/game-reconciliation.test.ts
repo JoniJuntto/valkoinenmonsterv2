@@ -19,6 +19,7 @@ const createSnapshot = (
 ): GameSnapshot => ({
 	bestRunCans: 0,
 	cans: 0,
+	draftTier: 0,
 	frenzyEndsAt: null,
 	goldenCans: 0,
 	goldenRushBuffEndsAt: null,
@@ -35,6 +36,7 @@ const createSnapshot = (
 	producers: createInitialProducers(),
 	revision: 1,
 	runCans: 0,
+	runDraft: null,
 	runUpgrades: [],
 	serverNow: 1000,
 	totalGoldenCans: 0,
