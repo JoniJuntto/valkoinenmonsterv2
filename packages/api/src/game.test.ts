@@ -3,32 +3,43 @@ import { describe, expect, test } from "bun:test";
 import {
 	type AchievementProgress,
 	acceptManualClicks,
+	bestStockerPurchase,
+	CAN_VARIANTS,
+	COLLECTION_SETS,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
-	cheapestAffordableProducer,
+	calculateProductionCps,
 	clampGameValue,
+	collectionMultiplier,
+	collectUnlockedVariants,
+	completedCollectionSets,
 	countUnlockedAchievements,
 	createHeadStartProducers,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	crossWorldMultiplier,
+	derivedCanVariantIds,
+	FLAVOR_UPGRADES,
 	FRENZY_DURATION_MS,
 	formatGameNumber,
 	frenzyDurationMs,
 	frenzyMultiplier,
 	type GameProgress,
+	GOLDEN_RUSH_DROP_CHANCE,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_RUSH_MIN_DELAY_MS,
 	GOLDEN_UPGRADES,
 	goldenCanPotential,
 	goldenUpgradeCost,
 	isWorldUnlocked,
+	isProducerId,
 	luckyCanGain,
 	MAX_GAME_VALUE,
 	MAX_PERSISTED_COUNTER,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
 	PRODUCERS,
 	prestigeReward,
 	producerBulkCost,
@@ -36,11 +47,15 @@ import {
 	productionTimeMs,
 	RUN_UPGRADES,
 	rollGoldenRushDelayMs,
+	rollGoldenRushDrop,
 	rollGoldenRushReward,
 	WORLDS,
+	unionCollection,
+	unlockedAchievementIds,
 } from "./game";
 
 const createProgress = (): GameProgress => ({
+	collection: [],
 	goldenUpgrades: createInitialGoldenUpgrades(),
 	producers: createInitialProducers(),
 	runUpgrades: [],
@@ -68,11 +83,49 @@ describe("Monster game economy", () => {
 		);
 	});
 
-	test("selects the cheapest producer by its current scaled price", () => {
+	test("selects the best value producer instead of the cheapest", () => {
 		const progress = createProgress();
-		progress.producers["pull-tab"] = 20;
-		expect(cheapestAffordableProducer(progress, 100)).toBe("mini-fridge");
-		expect(cheapestAffordableProducer(progress, 99)).toBeNull();
+		progress.producers["pull-tab"] = 30;
+		progress.producers["mini-fridge"] = 10;
+		// Pull Tab #31 costs ~993 cans for 0.1 CPS and Mini Fridge #11 ~404 cans
+		// for 1 CPS, while a Vending Machine costs 1100 for 8 CPS (+ synergy on
+		// Pull Tabs) — best value per can wins over lowest price.
+		expect(bestStockerPurchase(progress, 1500)).toBe("vending-machine");
+		expect(bestStockerPurchase(createProgress(), 14)).toBeNull();
+	});
+
+	test("synergies flip the stocker's best purchase", () => {
+		const progress = createProgress();
+		progress.producers["vending-machine"] = 50;
+		// A Mini Fridge (100 cans, 1 CPS) boosts 50 Vending Machines by +1%:
+		// 6 CPS for 100 cans beats a 15-can Pull Tab's 0.1 CPS.
+		expect(bestStockerPurchase(progress, 200)).toBe("mini-fridge");
+	});
+
+	test("every producer boosts a different producer", () => {
+		const targets = PRODUCERS.map(({ id }) => PRODUCER_SYNERGIES[id]);
+		// 18 distinct, valid, non-self targets => a fixed-point-free permutation.
+		expect(new Set(targets).size).toBe(PRODUCERS.length);
+		for (const { id } of PRODUCERS) {
+			expect(isProducerId(PRODUCER_SYNERGIES[id])).toBe(true);
+			expect(PRODUCER_SYNERGIES[id]).not.toBe(id);
+		}
+		expect(PRODUCER_SYNERGIES["vending-machine"]).toBe("pull-tab");
+		expect(PRODUCER_SYNERGIES["monster-singularity"]).toBe("can-portal");
+	});
+
+	test("producer synergies boost a different producer's output", () => {
+		const progress = createProgress();
+		progress.producers["pull-tab"] = 10;
+		progress.runUpgrades.push("pull-tab-10");
+		// 0.1 × 10 × 2 (milestone) × 1.01 (Stocked Up) = 2.02 CPS
+		expect(calculateCps(progress)).toBeCloseTo(2.02);
+		progress.producers["vending-machine"] = 1;
+		// Vending Machine boosts Pull Tab +1%: (2.02 × 1.01 + 8 × 1.01) = 10.1202
+		expect(calculateCps(progress)).toBeCloseTo(10.1202, 3);
+		progress.producers["vending-machine"] = 2;
+		// +2%: (2.02 × 1.02 + 16) × 1.01 = 18.2204
+		expect(calculateCps(progress)).toBeCloseTo(18.2204, 3);
 	});
 
 	test("keeps each producer base price within ten minutes of base output", () => {
@@ -238,6 +291,19 @@ describe("Monster game economy", () => {
 			})
 		).toBe(8);
 	});
+
+	test("keeps unlocked achievements through a prestige reset", () => {
+		const progress = createProgress();
+		progress.producers["pull-tab"] = 100;
+		const unlocked = unlockedAchievementIds(progress);
+		expect(unlocked).toHaveLength(4);
+		const afterPrestige = {
+			...createProgress(),
+			unlockedAchievements: unlocked,
+		};
+		expect(countUnlockedAchievements(afterPrestige)).toBe(4);
+		expect(unlockedAchievementIds(afterPrestige)).toEqual(unlocked);
+	});
 });
 
 describe("golden can rush", () => {
@@ -335,9 +401,10 @@ describe("worlds", () => {
 		progress.producers["blacklight-still"] = 1;
 		progress.producers["frost-coil"] = 1;
 		progress.producers["pallet-rack"] = 1;
-		// prestige 9 unlocks four prestige-tier achievements (+4%)
+		// prestige 9 unlocks four prestige-tier achievements (+4%); frost-coil
+		// and pallet-rack also get +1% from the owned producers that boost them
 		expect(calculateCps(progress)).toBeCloseTo(
-			(0.1 + 7000 + 1_500_000 + 400_000_000) * 1.3 * 1.04
+			(0.1 + 7000 + 1_500_000 * 1.01 + 400_000_000 * 1.01) * 1.3 * 1.04
 		);
 	});
 
@@ -368,17 +435,103 @@ describe("worlds", () => {
 			prestigeLevel: 2,
 		};
 		// Price every home producer past the 4.2M can budget so a world
-		// producer would be the cheapest pick if its world were considered.
+		// producer would be the only candidate if its world were considered.
 		progress.producers["pull-tab"] = 90;
 		progress.producers["mini-fridge"] = 77;
 		progress.producers["vending-machine"] = 60;
 		progress.producers["corner-shop"] = 42;
 		progress.producers["can-warehouse"] = 25;
 		progress.producers["filling-line"] = 12;
-		expect(cheapestAffordableProducer(progress, 4_200_000)).toBeNull();
+		expect(bestStockerPurchase(progress, 4_200_000)).toBeNull();
 		progress.prestigeLevel = 3;
-		expect(cheapestAffordableProducer(progress, 4_200_000)).toBe(
+		expect(bestStockerPurchase(progress, 4_200_000)).toBe(
 			"blacklight-still"
 		);
+	});
+});
+
+describe("collection codex", () => {
+	test("derives flavor and prestige-world unlocks without touching drops", () => {
+		const progress = createProgress();
+		expect(derivedCanVariantIds(progress)).toEqual([]);
+		progress.runUpgrades.push("ultra-white");
+		expect(derivedCanVariantIds(progress)).toEqual(["ultra-white"]);
+		progress.prestigeLevel = 5;
+		expect(derivedCanVariantIds(progress)).toEqual([
+			"ultra-white",
+			"world-1",
+			"world-5",
+		]);
+		progress.prestigeLevel = 4;
+		expect(derivedCanVariantIds(progress)).toEqual(["ultra-white", "world-1"]);
+	});
+
+	test("collects unlocks without duplicating known variants", () => {
+		const progress = createProgress();
+		progress.collection = ["ultra-white"];
+		progress.runUpgrades.push("ultra-white", "ultra-blue");
+		expect(collectUnlockedVariants(progress)).toEqual([
+			"ultra-white",
+			"ultra-blue",
+		]);
+		const same = ["ultra-white", "ultra-blue"];
+		expect(unionCollection(same, ["ultra-white"])).toBe(same);
+	});
+
+	test("completing sets grants stacking production bonuses", () => {
+		expect(collectionMultiplier([])).toBe(1);
+		const flavorIds = CAN_VARIANTS.filter(
+			({ setId }) => setId === "flavor-family"
+		).map(({ id }) => id);
+		expect(completedCollectionSets(flavorIds.slice(0, 5))).toEqual([]);
+		expect(collectionMultiplier(flavorIds)).toBe(1.25);
+		const rushIds = CAN_VARIANTS.filter(
+			({ setId }) => setId === "golden-rush"
+		).map(({ id }) => id);
+		const worldIds = CAN_VARIANTS.filter(
+			({ setId }) => setId === "world-exclusives"
+		).map(({ id }) => id);
+		expect(collectionMultiplier([...flavorIds, ...rushIds])).toBe(1.75);
+		expect(collectionMultiplier([...flavorIds, ...rushIds, ...worldIds])).toBe(
+			2.75
+		);
+		expect(
+			completedCollectionSets([...flavorIds, ...rushIds, ...worldIds])
+		).toEqual(COLLECTION_SETS.map(({ id }) => id));
+	});
+
+	test("codex bonus multiplies production", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		const base = calculateProductionCps(progress);
+		progress.collection = CAN_VARIANTS.map(({ id }) => id);
+		expect(calculateProductionCps(progress)).toBeCloseTo(base * 2.75);
+	});
+
+	test("rolls golden rush drops per reward kind and ownership", () => {
+		expect(rollGoldenRushDrop("lucky", 0.1, [])).toBe("golden-flash");
+		expect(rollGoldenRushDrop("click_rush", 0.1, [])).toBe("golden-storm");
+		expect(rollGoldenRushDrop("production_frenzy", 0.1, [])).toBe(
+			"golden-tide"
+		);
+		expect(rollGoldenRushDrop("lucky", GOLDEN_RUSH_DROP_CHANCE, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", 0.5, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", -1, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", Number.NaN, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", 0.1, ["golden-flash"])).toBeNull();
+	});
+
+	test("keeps the codex catalog consistent", () => {
+		const variantIds = new Set(CAN_VARIANTS.map(({ id }) => id));
+		expect(variantIds.size).toBe(CAN_VARIANTS.length);
+		const setIds = new Set(COLLECTION_SETS.map(({ id }) => id));
+		const flavorCount = FLAVOR_UPGRADES.length;
+		expect(CAN_VARIANTS.length).toBe(flavorCount + 3 + 4);
+		for (const variant of CAN_VARIANTS) {
+			expect(setIds.has(variant.setId)).toBe(true);
+		}
+		for (const flavor of FLAVOR_UPGRADES) {
+			expect(variantIds.has(flavor.id)).toBe(true);
+		}
 	});
 });

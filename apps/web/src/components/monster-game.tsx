@@ -3,12 +3,17 @@ import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
 	ALL_PRODUCERS,
+	bestStockerPurchase,
+	CAN_VARIANTS,
 	CLICK_RUSH_MULTIPLIER,
+	COLLECTION_SETS,
+	type CollectionSetId,
 	calculateClickValue,
 	calculateCps,
-	cheapestAffordableProducer,
 	clampGameValue,
 	clickBuffMultiplier,
+	collectionMultiplier,
+	completedCollectionSets,
 	countUnlockedAchievements,
 	formatGameNumber,
 	frenzyDurationMs,
@@ -22,6 +27,8 @@ import {
 	isWorldUnlocked,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
+	PRODUCER_SYNERGY_SOURCES,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerId,
 	prestigeReward,
@@ -31,6 +38,7 @@ import {
 	type RunUpgradeKind,
 	WORLDS,
 	type WorldDefinition,
+	SYNERGY_BONUS_PER_OWNED,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -53,6 +61,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { SeasonBanner, SeasonPanel } from "@/components/season-panel";
 import {
 	bucketCans,
 	bucketCps,
@@ -86,6 +95,20 @@ const CAN_IMAGES = {
 		regular: "/valkoinenmonster.webp",
 	},
 } as const;
+
+// ponytail: classic Konami code, swipe gestures if anyone actually asks
+const KONAMI_SEQUENCE = [
+	"ArrowUp",
+	"ArrowUp",
+	"ArrowDown",
+	"ArrowDown",
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowLeft",
+	"ArrowRight",
+	"b",
+	"a",
+] as const;
 
 const formatElapsedTime = (elapsedMs: number): string => {
 	const totalSeconds = Math.floor(elapsedMs / 1000);
@@ -218,6 +241,11 @@ const runUpgradesByCost = [...RUN_UPGRADES].sort(
 	(left, right) => left.cost - right.cost
 );
 
+const PRODUCER_NAME_BY_ID = new Map(
+	ALL_PRODUCERS.map(({ id, name }) => [id, name])
+);
+const SYNERGY_PERCENT = SYNERGY_BONUS_PER_OWNED * 100;
+
 const selectVisibleProducers = (game: GameSnapshot, world: WorldDefinition) => {
 	let highestOwnedIndex = -1;
 	for (const [index, producer] of world.producers.entries()) {
@@ -262,6 +290,19 @@ const selectVisibleRunUpgrades = (
 		visible.push(upgrade);
 	}
 	return visible;
+};
+
+const selectCanImage = (
+	isEsMode: boolean,
+	isMegisActive: boolean,
+	isFrenzyActive: boolean
+): string => {
+	if (isMegisActive) {
+		return "/valkoinenmegis.webp";
+	}
+	return CAN_IMAGES[isEsMode ? "es" : "monster"][
+		isFrenzyActive ? "frenzy" : "regular"
+	];
 };
 
 const GameLoading = () => (
@@ -396,6 +437,7 @@ interface CanCardProps {
 	clickLabels: ClickLabel[];
 	game: GameSnapshot;
 	isEsMode: boolean;
+	isMegisActive: boolean;
 	isMuted: boolean;
 	onClick: () => void;
 	onToggleEsMode: () => void;
@@ -405,6 +447,7 @@ interface CanCardProps {
 const CanCard = ({
 	game,
 	isEsMode,
+	isMegisActive,
 	isMuted,
 	onClick,
 	onToggleEsMode,
@@ -413,10 +456,7 @@ const CanCard = ({
 }: CanCardProps) => {
 	const now = game.serverNow;
 	const isFrenzyActive = (game.frenzyEndsAt ?? 0) > now;
-	const canImage =
-		CAN_IMAGES[isEsMode ? "es" : "monster"][
-			isFrenzyActive ? "frenzy" : "regular"
-		];
+	const canImage = selectCanImage(isEsMode, isMegisActive, isFrenzyActive);
 	const frenzySeconds = isFrenzyActive
 		? Math.max(0, ((game.frenzyEndsAt ?? now) - now) / 1000)
 		: 0;
@@ -618,6 +658,12 @@ const ShopCard = ({
 												owned,
 												buyQuantity
 											);
+											const boostsName = PRODUCER_NAME_BY_ID.get(
+												PRODUCER_SYNERGIES[producer.id]
+											);
+											const boostedByName = PRODUCER_NAME_BY_ID.get(
+												PRODUCER_SYNERGY_SOURCES[producer.id]
+											);
 											return (
 												<li
 													className="flex items-center justify-between gap-3 bg-muted/30 p-3"
@@ -628,6 +674,9 @@ const ShopCard = ({
 														<p className="text-muted-foreground">
 															{owned} owned ·{" "}
 															{formatGameNumber(producer.baseCps)} base CPS
+														</p>
+														<p className="text-muted-foreground text-xs">
+															{`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
 														</p>
 													</div>
 													<Button
@@ -904,6 +953,96 @@ const AchievementsCard = ({ game }: AchievementsCardProps) => {
 	);
 };
 
+interface CodexCardProps {
+	game: GameSnapshot;
+}
+
+const CodexCard = ({ game }: CodexCardProps) => {
+	const owned = new Set(game.collection);
+	const completed = new Set(completedCollectionSets(game.collection));
+	const bonusPercent = Math.round(
+		(collectionMultiplier(game.collection) - 1) * 100
+	);
+	return (
+		<Card className="order-6 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Codex
+				</CardTitle>
+				<CardDescription>
+					{owned.size}/{CAN_VARIANTS.length} cans collected · codex bonus +
+					{bonusPercent}% production
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="monster-shop max-h-[40svh] overflow-y-auto">
+				<div className="flex flex-col gap-3">
+					{COLLECTION_SETS.map((set) => {
+						const variants = CAN_VARIANTS.filter(
+							(variant) => variant.setId === set.id
+						);
+						const ownedCount = variants.filter((variant) =>
+							owned.has(variant.id)
+						).length;
+						const isComplete = completed.has(set.id);
+						return (
+							<section
+								className={cn("p-2", isComplete && "bg-muted/30")}
+								key={set.id}
+							>
+								<header className="flex items-baseline justify-between gap-2">
+									<span
+										className={cn("font-medium", isComplete && "text-primary")}
+									>
+										{isComplete ? "★" : "☆"} {set.name}
+									</span>
+									<span className="text-right text-muted-foreground">
+										{ownedCount}/{variants.length} · {set.description}
+										{isComplete ? "" : " when complete"}
+									</span>
+								</header>
+								<ul className="mt-1 grid gap-1 sm:grid-cols-2">
+									{variants.map((variant) => {
+										const isOwned = owned.has(variant.id);
+										return (
+											<li
+												className={cn(
+													"flex items-center gap-2 p-1",
+													!isOwned && "opacity-45"
+												)}
+												key={variant.id}
+												title={variant.description}
+											>
+												<span
+													aria-hidden="true"
+													className="inline-block h-3 w-2.5 shrink-0 rounded-[2px] border"
+													style={{
+														backgroundColor: isOwned
+															? variant.color
+															: "transparent",
+														borderColor: variant.color,
+													}}
+												/>
+												<span className="min-w-0">
+													<span className="block truncate font-medium">
+														{variant.name}
+													</span>
+													<span className="block truncate text-muted-foreground">
+														{variant.description}
+													</span>
+												</span>
+											</li>
+										);
+									})}
+								</ul>
+							</section>
+						);
+					})}
+				</div>
+			</CardContent>
+		</Card>
+	);
+};
+
 interface GoldenRushCanProps {
 	game: GameSnapshot;
 	onClaim: () => void;
@@ -953,6 +1092,8 @@ export const MonsterGame = () => {
 	const clickLabelIdRef = useRef(0);
 	const clickLabelTimeoutsRef = useRef(new Set<number>());
 	const [isEsMode, setIsEsMode] = useState(false);
+	const [isMegisActive, setIsMegisActive] = useState(false);
+	const konamiIndexRef = useRef(0);
 	const [isMuted, setIsMuted] = useState(() =>
 		typeof window === "undefined"
 			? false
@@ -965,6 +1106,8 @@ export const MonsterGame = () => {
 			window.localStorage.getItem("monster-smart-stocker") !== "false"
 	);
 	const unlockedAchievementIdsRef = useRef<Set<string> | null>(null);
+	const ownedVariantIdsRef = useRef<Set<string> | null>(null);
+	const completedSetIdsRef = useRef<Set<CollectionSetId> | null>(null);
 	const canAudioPoolRef = useRef<HTMLAudioElement[]>([]);
 	const canAudioIndexRef = useRef(0);
 	const dubstepAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1128,6 +1271,28 @@ export const MonsterGame = () => {
 	}, [isMuted]);
 
 	useEffect(() => {
+		const handleKeyDown = (event: KeyboardEvent) => {
+			const expected = KONAMI_SEQUENCE[konamiIndexRef.current];
+			const pressed =
+				event.key.length === 1 ? event.key.toLowerCase() : event.key;
+			if (pressed === expected) {
+				konamiIndexRef.current += 1;
+				if (konamiIndexRef.current === KONAMI_SEQUENCE.length) {
+					konamiIndexRef.current = 0;
+					setIsMegisActive((active) => {
+						toast(active ? "Monster is back" : "MEGIS MODE");
+						return !active;
+					});
+				}
+				return;
+			}
+			konamiIndexRef.current = pressed === KONAMI_SEQUENCE[0] ? 1 : 0;
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, []);
+
+	useEffect(() => {
 		window.localStorage.setItem(
 			"monster-smart-stocker",
 			String(isSmartStockerEnabled)
@@ -1173,6 +1338,55 @@ export const MonsterGame = () => {
 		},
 		[]
 	);
+
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const owned = new Set(game.collection);
+		const previousVariants = ownedVariantIdsRef.current;
+		ownedVariantIdsRef.current = owned;
+		if (!(previousVariants && owned.size > previousVariants.size)) {
+			return;
+		}
+		for (const variant of CAN_VARIANTS) {
+			if (!owned.has(variant.id) || previousVariants.has(variant.id)) {
+				continue;
+			}
+			toast.success(`Can unlocked: ${variant.name}`, {
+				description: variant.description,
+			});
+			track(AnalyticsEvents.game.codexVariantUnlocked, {
+				prestige_level: game.prestigeLevel,
+				set_id: variant.setId,
+				variant_id: variant.id,
+			});
+		}
+	}, [game]);
+
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const completedSetIds = new Set(completedCollectionSets(game.collection));
+		const previousSets = completedSetIdsRef.current;
+		completedSetIdsRef.current = completedSetIds;
+		if (!previousSets) {
+			return;
+		}
+		for (const set of COLLECTION_SETS) {
+			if (!completedSetIds.has(set.id) || previousSets.has(set.id)) {
+				continue;
+			}
+			toast.success(`Set complete: ${set.name}`, {
+				description: `${set.description} codex bonus`,
+			});
+			track(AnalyticsEvents.game.codexSetCompleted, {
+				prestige_level: game.prestigeLevel,
+				set_id: set.id,
+			});
+		}
+	}, [game]);
 
 	const isFrenzyActive = game
 		? (game.frenzyEndsAt ?? 0) > game.serverNow
@@ -1370,7 +1584,7 @@ export const MonsterGame = () => {
 				isSmartStockerEnabled &&
 				current.goldenUpgrades["smart-stocker"] > 0
 			) {
-				const producerId = cheapestAffordableProducer(current, current.cans);
+				const producerId = bestStockerPurchase(current, current.cans);
 				if (producerId) {
 					buyProducerNow(producerId, "smart_stocker").catch(() => undefined);
 					return;
@@ -1535,6 +1749,7 @@ export const MonsterGame = () => {
 				isFrenzyActive && "is-frenzy"
 			)}
 		>
+			<SeasonBanner />
 			<StatsCard
 				clicksPerSecond={clicksPerSecond}
 				game={game}
@@ -1545,6 +1760,7 @@ export const MonsterGame = () => {
 				clickLabels={clickLabels}
 				game={game}
 				isEsMode={isEsMode}
+				isMegisActive={isMegisActive}
 				isMuted={isMuted}
 				onClick={clickCan}
 				onToggleEsMode={toggleEsMode}
@@ -1565,7 +1781,12 @@ export const MonsterGame = () => {
 				isAnonymous={Boolean(session.user.isAnonymous)}
 				viewerId={session.user.id}
 			/>
+			<SeasonPanel
+				isAnonymous={Boolean(session.user.isAnonymous)}
+				viewerId={session.user.id}
+			/>
 			<AchievementsCard game={game} />
+			<CodexCard game={game} />
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>
 	);

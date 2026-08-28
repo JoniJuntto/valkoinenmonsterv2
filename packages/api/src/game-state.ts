@@ -14,6 +14,8 @@ import {
 	GOLDEN_UPGRADES,
 	type GoldenRushBuffKind,
 	type GoldenUpgradeRanks,
+	isAchievementId,
+	isCanVariantId,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
 	MAX_GAME_VALUE,
@@ -102,6 +104,19 @@ export const normalizePersistedGameState = (
 		goldenCans,
 		clampGameCounter(state.totalGoldenCans)
 	);
+	const normalizeCollection = (value: unknown): string[] => {
+		if (!Array.isArray(value)) {
+			return [];
+		}
+		return [
+			...new Set(
+				value.filter(
+					(id): id is string => typeof id === "string" && isCanVariantId(id)
+				)
+			),
+		];
+	};
+
 	const goldenUpgrades = normalizeGoldenUpgrades(state.goldenUpgrades);
 	const goldenRushBuffKind =
 		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
@@ -119,6 +134,7 @@ export const normalizePersistedGameState = (
 		...state,
 		bestRunCans,
 		cans,
+		collection: normalizeCollection(state.collection),
 		frenzyEndsAt: normalizeTimer(
 			state.frenzyEndsAt,
 			serverNowMs,
@@ -156,6 +172,9 @@ export const normalizePersistedGameState = (
 			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
 			: [],
 		totalGoldenCans,
+		unlockedAchievements: Array.isArray(state.unlockedAchievements)
+			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
+			: [],
 	};
 };
 
@@ -214,12 +233,23 @@ export const assertProgressionInvariants = (
 		"run upgrades must be known and unique"
 	);
 	invariant(
+		state.unlockedAchievements.length ===
+			new Set(state.unlockedAchievements).size &&
+			state.unlockedAchievements.every(isAchievementId),
+		"unlocked achievements must be known and unique"
+	);
+	invariant(
 		Object.keys(state.goldenUpgrades).length === GOLDEN_UPGRADES.length &&
 			GOLDEN_UPGRADES.every(({ id, maxRank }) => {
 				const rank = state.goldenUpgrades[id];
 				return Number.isInteger(rank) && rank >= 0 && rank <= maxRank;
 			}),
 		"golden upgrade ranks must match the catalog"
+	);
+	invariant(
+		state.collection.length === new Set(state.collection).size &&
+			state.collection.every(isCanVariantId),
+		"collection variants must be known and unique"
 	);
 	invariant(
 		Number.isFinite(state.manualClickBudget) &&

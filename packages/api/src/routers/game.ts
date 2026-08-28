@@ -14,13 +14,14 @@ import { z } from "zod";
 import {
 	ALL_PRODUCERS,
 	acceptManualClicks,
+	bestStockerPurchase,
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
-	cheapestAffordableProducer,
 	clampGameCounter,
 	clampGameValue,
+	collectUnlockedVariants,
 	createHeadStartProducers,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
@@ -40,6 +41,8 @@ import {
 	nextGoldenCanRequirement,
 	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
+	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	prestigeReward,
 	producerBulkCost,
@@ -47,8 +50,11 @@ import {
 	RUN_UPGRADES,
 	randomFrenzyThreshold,
 	rollGoldenRushDelayMs,
+	rollGoldenRushDrop,
 	rollGoldenRushReward,
 	worldOfProducer,
+	unionCollection,
+	unlockedAchievementIds,
 } from "../game";
 import {
 	assertProgressionInvariants,
@@ -123,6 +129,7 @@ export const createDefaultGameState = (
 	now: Date
 ): MutableGameState => {
 	const progress: GameProgress = {
+		collection: [],
 		goldenUpgrades: createInitialGoldenUpgrades(),
 		producers: createInitialProducers(),
 		runUpgrades: [],
@@ -148,6 +155,7 @@ export const createDefaultGameState = (
 		nextFrenzyClick: randomFrenzyThreshold(progress, secureRandom()),
 		revision: 0,
 		shadowBanned: false,
+		unlockedAchievements: [],
 		updatedAt: now,
 	};
 };
@@ -281,6 +289,7 @@ const toSnapshot = (
 ): GameSnapshot => ({
 	bestRunCans: state.bestRunCans,
 	cans: state.cans,
+	collection: state.collection,
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
 	goldenCans: state.goldenCans,
 	goldenRushBuffEndsAt: state.goldenRushBuffEndsAt?.getTime() ?? null,
@@ -300,6 +309,7 @@ const toSnapshot = (
 	runUpgrades: state.runUpgrades,
 	serverNow,
 	totalGoldenCans: state.totalGoldenCans,
+	unlockedAchievements: state.unlockedAchievements,
 });
 
 interface GameMutationResult {
@@ -338,7 +348,15 @@ export const mutateGameStateWithState = async (
 		input.pendingManualClicks,
 		now
 	);
-	const mutated = mutation(accrual.state, now);
+	const applied = mutation(accrual.state, now);
+	// Backfill derived unlocks (persisted achievements, codex flavors and
+	// prestige worlds) so they land in the same revision as the triggering
+	// action.
+	const mutated = {
+		...applied,
+		collection: collectUnlockedVariants(applied),
+		unlockedAchievements: unlockedAchievementIds(applied),
+	};
 	assertProgressionInvariants(mutated, now);
 	const [saved] = await database
 		.update(gameState)
@@ -486,7 +504,7 @@ export const advanceOpenState = (
 		simulatedNow += AGENT_HEARTBEAT_MS;
 		nextState = accrueState(nextState, 0, new Date(simulatedNow));
 		if (nextState.goldenUpgrades["smart-stocker"] > 0) {
-			const producerId = cheapestAffordableProducer(nextState, nextState.cans);
+			const producerId = bestStockerPurchase(nextState, nextState.cans);
 			if (producerId) {
 				nextState = buyProducer(producerId)(nextState, new Date(simulatedNow));
 			}
@@ -597,7 +615,9 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 export const claimGoldenRush =
 	(
 		randomValue: number,
-		onReward?: (reward: GoldenRushReward) => void
+		dropRandomValue = 1,
+		onReward?: (reward: GoldenRushReward) => void,
+		onDrop?: (variantId: string) => void
 	): GameMutation =>
 	(state, now) => {
 		const nowMs = now.getTime();
@@ -614,14 +634,29 @@ export const claimGoldenRush =
 		}
 		const reward = rollGoldenRushReward(state, state.cans, randomValue);
 		onReward?.(reward);
+		const droppedVariant = rollGoldenRushDrop(
+			reward.kind,
+			dropRandomValue,
+			state.collection
+		);
+		if (droppedVariant) {
+			onDrop?.(droppedVariant);
+		}
 		const goldenRushReadyAt = new Date(
 			nowMs + rollGoldenRushDelayMs(secureRandom())
 		);
+		const collected =
+			droppedVariant === null
+				? state
+				: {
+						...state,
+						collection: unionCollection(state.collection, [droppedVariant]),
+					};
 		if (reward.kind === "lucky") {
-			return { ...addCans(state, reward.cans), goldenRushReadyAt };
+			return { ...addCans(collected, reward.cans), goldenRushReadyAt };
 		}
 		return {
-			...state,
+			...collected,
 			goldenRushBuffEndsAt: new Date(nowMs + reward.durationMs),
 			goldenRushBuffKind: reward.kind,
 			goldenRushReadyAt,
@@ -637,6 +672,7 @@ export const prestige: GameMutation = (state) => {
 		});
 	}
 	const nextProgress: GameProgress = {
+		collection: state.collection,
 		goldenUpgrades: state.goldenUpgrades,
 		producers: createHeadStartProducers(state.goldenUpgrades),
 		runUpgrades: [],
@@ -699,15 +735,23 @@ export const gameRouter = router({
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
 			let reward: GoldenRushReward | null = null;
+			let droppedVariant: string | null = null;
 			const snapshot = await mutateGameState(
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
 				input,
-				claimGoldenRush(secureRandom(), (rolled) => {
-					reward = rolled;
-				})
+				claimGoldenRush(
+					secureRandom(),
+					secureRandom(),
+					(rolled) => {
+						reward = rolled;
+					},
+					(variantId) => {
+						droppedVariant = variantId;
+					}
+				)
 			);
-			return { reward, snapshot };
+			return { droppedVariant, reward, snapshot };
 		}),
 	getState: protectedProcedure.query(({ ctx }) =>
 		getGameState(ctx.session.user.id, sessionIsAnonymous(ctx.session))
@@ -865,6 +909,7 @@ export const createAgentGameObservation = (
 		return {
 			affordable: unlocked && state.cans >= cost,
 			baseCps: producer.baseCps,
+			boosts: PRODUCER_SYNERGIES[producer.id],
 			cost,
 			id: producer.id,
 			name: producer.name,
