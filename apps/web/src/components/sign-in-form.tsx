@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import { Input } from "@valkoinenmonsterv2/ui/components/input";
 import { Label } from "@valkoinenmonsterv2/ui/components/label";
@@ -143,6 +143,15 @@ export default function SignInForm({
 			</form>
 
 			<div className="mt-4 text-center">
+				<Link
+					className="text-indigo-600 text-sm hover:text-indigo-800"
+					to="/reset-password"
+				>
+					Forgot your password?
+				</Link>
+			</div>
+
+			<div className="mt-2 text-center">
 				<Button
 					className="text-indigo-600 hover:text-indigo-800"
 					data-rybbit-event="auth.form.switched"

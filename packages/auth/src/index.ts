@@ -30,6 +30,34 @@ export function createAuth() {
 		}),
 		emailAndPassword: {
 			enabled: true,
+			sendResetPassword: async ({ user, url }) => {
+				if (!env.RESEND_API_KEY) {
+					// ponytail: no mail provider in dev — log the link, swap for a real
+					// provider only if Resend stops being enough
+					process.stdout.write(`Password reset for ${user.email}: ${url}\n`);
+					return;
+				}
+
+				const res = await fetch("https://api.resend.com/emails", {
+					body: JSON.stringify({
+						from: env.EMAIL_FROM,
+						subject: "Reset your Valkoinen Monster password",
+						text: `Reset your password: ${url}\n\nThe link expires in an hour. If you didn't ask for this, ignore this email.`,
+						to: user.email,
+					}),
+					headers: {
+						Authorization: `Bearer ${env.RESEND_API_KEY}`,
+						"Content-Type": "application/json",
+					},
+					method: "POST",
+				});
+
+				if (!res.ok) {
+					throw new Error(
+						`Resend rejected reset email: ${res.status} ${await res.text()}`
+					);
+				}
+			},
 		},
 		plugins: [
 			anonymous({

@@ -1,0 +1,17 @@
+{
+  "disabled": false,
+  "pathTemplate": "~/.humanlayer/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}",
+  "branchTemplate": "{{ TASKSLUG }}",
+  "sourceRef": "origin/main",
+  "setupCommand": "bun install",
+  "copyGlobs": [
+    "apps/server/.env"
+  ],
+  "repos": [
+    {
+      "localPath": ".",
+      "description": "Valkoinen Monster monorepo",
+      "primary": true
+    }
+  ]
+}

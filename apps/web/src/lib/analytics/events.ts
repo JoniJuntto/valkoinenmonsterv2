@@ -8,6 +8,8 @@ export const AnalyticsEvents = {
 		anonymousSucceeded: "auth.anonymous.succeeded",
 		formSwitched: "auth.form.switched",
 		formViewed: "auth.form.viewed",
+		passwordResetCompleted: "auth.password_reset.completed",
+		passwordResetRequested: "auth.password_reset.requested",
 		signInFailed: "auth.sign_in.failed",
 		signInSubmitted: "auth.sign_in.submitted",
 		signInSucceeded: "auth.sign_in.succeeded",

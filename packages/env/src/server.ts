@@ -10,9 +10,13 @@ export const env = createEnv({
 		BETTER_AUTH_URL: z.url(),
 		CORS_ORIGIN: z.url(),
 		DATABASE_URL: z.string().min(1),
+		EMAIL_FROM: z
+			.string()
+			.default("Valkoinen Monster <noreply@huikaton.online>"),
 		NODE_ENV: z
 			.enum(["development", "production", "test"])
 			.default("development"),
+		RESEND_API_KEY: z.string().optional(),
 		RYBBIT_API_KEY: z.string().optional(),
 		RYBBIT_SITE_ID: z.string().default("c7b355329e37"),
 	},
