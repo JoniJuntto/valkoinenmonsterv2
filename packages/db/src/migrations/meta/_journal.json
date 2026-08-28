@@ -26,8 +26,22 @@
     {
       "idx": 3,
       "version": "7",
-      "when": 1787915322318,
-      "tag": "0003_steep_mockingbird",
+      "when": 1787915169412,
+      "tag": "0003_high_garia",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787915169413,
+      "tag": "0004_regular_betty_brant",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787917489371,
+      "tag": "0005_rapid_random",
       "breakpoints": true
     }
   ]

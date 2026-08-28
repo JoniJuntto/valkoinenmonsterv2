@@ -15,6 +15,7 @@ export const ACHIEVEMENT_PRODUCTION_BONUS = 0.01;
 export const FRENZY_CORE_BONUS = 5;
 export const FRENZY_CHRONOMETER_BONUS_MS = 2000;
 export const OVERCHARGE_MULTIPLIER = 2;
+export const GOLDEN_RUSH_DROP_CHANCE = 0.25;
 
 export const COOLING_TOWER_BASE_COST = 200_000_000_000;
 export const COOLING_TOWER_COST_GROWTH = 1.15;
@@ -173,6 +174,37 @@ export const WALLS = [
 
 export type WallId = (typeof WALLS)[number]["id"];
 
+export const SYNERGY_BONUS_PER_OWNED = 0.01;
+
+// Every producer boosts exactly one different producer by
+// SYNERGY_BONUS_PER_OWNED per unit owned (a permutation with no fixed
+// points), so what you buy shapes what your cheaper producers are worth.
+export const PRODUCER_SYNERGIES = {
+	"caffeine-nebula": "white-hole",
+	"can-portal": "monster-galaxy",
+	"can-warehouse": "filling-line",
+	"corner-shop": "can-warehouse",
+	"cosmic-six-pack": "taurine-comet",
+	"dimension-dispenser": "time-brewery",
+	"filling-line": "monster-mine",
+	"mini-fridge": "vending-machine",
+	"monster-galaxy": "cosmic-six-pack",
+	"monster-mine": "white-reactor",
+	"monster-singularity": "can-portal",
+	"pull-tab": "corner-shop",
+	"taurine-comet": "caffeine-nebula",
+	"the-beast": "mini-fridge",
+	"time-brewery": "the-beast",
+	"vending-machine": "pull-tab",
+	"white-hole": "dimension-dispenser",
+	"white-reactor": "monster-singularity",
+} as const satisfies Record<ProducerId, ProducerId>;
+
+export const PRODUCER_SYNERGY_SOURCES: Record<ProducerId, ProducerId> =
+	Object.fromEntries(
+		PRODUCERS.map(({ id }) => [PRODUCER_SYNERGIES[id], id])
+	) as Record<ProducerId, ProducerId>;
+
 export const ORIGINAL_PRODUCER_LINEUP_SIZE = 10;
 export const HEAD_START_COUNTS = [0, 10, 25, 50, 100] as const;
 
@@ -267,6 +299,23 @@ export const FLAVOR_UPGRADES: RunUpgradeDefinition[] = [
 	kind: "flavor",
 }));
 
+const FLAVOR_VARIANT_COLORS: Record<string, string> = {
+	"mango-loco": "#FBBF24",
+	"pipeline-punch": "#FB923C",
+	"ultra-black": "#1A1A1A",
+	"ultra-blue": "#35A7FF",
+	"ultra-fiesta": "#F97316",
+	"ultra-gold": "#F2C14E",
+	"ultra-paradise": "#2EE6A8",
+	"ultra-peachy-keen": "#FDBA8C",
+	"ultra-red": "#EF4444",
+	"ultra-rosa": "#F472B6",
+	"ultra-strawberry-dreams": "#F87171",
+	"ultra-violet": "#8B5CF6",
+	"ultra-watermelon": "#FB7185",
+	"ultra-white": "#F5F5F5",
+};
+
 export const MILESTONES = [10, 25, 50, 100, 150, 200, 250, 300] as const;
 const MILESTONE_COST_MULTIPLIERS = [
 	30, 250, 2500, 25_000, 250_000, 2_500_000, 25_000_000, 250_000_000,
@@ -328,7 +377,7 @@ export const GOLDEN_UPGRADES = [
 	{
 		baseCost: 40,
 		description:
-			"Buy the cheapest affordable producer every 5 seconds while open",
+			"Buy the best-value producer every 5 seconds while open (weighs synergies)",
 		id: "smart-stocker",
 		maxRank: 1,
 		name: "Smart Stocker",
@@ -403,6 +452,7 @@ export interface GoldenRushBuffState {
 }
 
 export interface GameProgress {
+	collection: string[];
 	goldenUpgrades: GoldenUpgradeRanks;
 	producers: ProducerCounts;
 	runUpgrades: string[];
@@ -410,12 +460,210 @@ export interface GameProgress {
 }
 
 export interface AchievementProgress extends GameProgress {
+	bestRunCans?: number;
 	coolantTowers?: number;
+	goldenCans?: number;
 	lifetimeCans?: number;
 	prestigeLevel?: number;
 	runCans?: number;
+	unlockedAchievements?: string[];
 	ventedWalls?: string[];
 }
+
+export type CollectionSetId =
+	| "flavor-family"
+	| "golden-rush"
+	| "world-exclusives";
+
+export interface CanVariantDefinition {
+	color: string;
+	description: string;
+	id: string;
+	name: string;
+	requiredPrestigeLevel?: number;
+	requiresFlavorId?: string;
+	setId: CollectionSetId;
+}
+
+export const CAN_VARIANTS: CanVariantDefinition[] = [
+	...FLAVOR_UPGRADES.map((flavor) => ({
+		color: FLAVOR_VARIANT_COLORS[flavor.id] ?? "#9CA3AF",
+		description: `Buy the ${flavor.name} upgrade`,
+		id: flavor.id,
+		name: flavor.name,
+		requiresFlavorId: flavor.id,
+		setId: "flavor-family" as const,
+	})),
+	{
+		color: "#FFD700",
+		description: "Drop from a Lucky Can golden rush",
+		id: "golden-flash",
+		name: "Golden Flash",
+		setId: "golden-rush",
+	},
+	{
+		color: "#FFA500",
+		description: "Drop from a Click Rush golden rush",
+		id: "golden-storm",
+		name: "Golden Storm",
+		setId: "golden-rush",
+	},
+	{
+		color: "#EAB308",
+		description: "Drop from a Production Frenzy golden rush",
+		id: "golden-tide",
+		name: "Golden Tide",
+		setId: "golden-rush",
+	},
+	{
+		color: "#A3E635",
+		description: "Reach prestige level 1",
+		id: "world-1",
+		name: "First Steps",
+		requiredPrestigeLevel: 1,
+		setId: "world-exclusives",
+	},
+	{
+		color: "#38BDF8",
+		description: "Reach prestige level 5",
+		id: "world-5",
+		name: "Rift Reserve",
+		requiredPrestigeLevel: 5,
+		setId: "world-exclusives",
+	},
+	{
+		color: "#A855F7",
+		description: "Reach prestige level 10",
+		id: "world-10",
+		name: "Singularity Stock",
+		requiredPrestigeLevel: 10,
+		setId: "world-exclusives",
+	},
+	{
+		color: "#F43F5E",
+		description: "Reach prestige level 25",
+		id: "world-25",
+		name: "Beast Sovereign",
+		requiredPrestigeLevel: 25,
+		setId: "world-exclusives",
+	},
+];
+
+const canVariantById = new Map(
+	CAN_VARIANTS.map((variant) => [variant.id, variant])
+);
+
+export interface CollectionSetDefinition {
+	bonus: number;
+	description: string;
+	id: CollectionSetId;
+	name: string;
+}
+
+export const COLLECTION_SETS: CollectionSetDefinition[] = [
+	{
+		bonus: 0.25,
+		description: "+25% production",
+		id: "flavor-family",
+		name: "Flavor Family",
+	},
+	{
+		bonus: 0.5,
+		description: "+50% production",
+		id: "golden-rush",
+		name: "Golden Rush Drops",
+	},
+	{
+		bonus: 1,
+		description: "+100% production",
+		id: "world-exclusives",
+		name: "World Exclusives",
+	},
+];
+
+const setBonusById = new Map(COLLECTION_SETS.map((set) => [set.id, set.bonus]));
+
+export const isCanVariantId = (value: string): boolean =>
+	canVariantById.has(value);
+
+export const getCanVariant = (id: string): CanVariantDefinition | undefined =>
+	canVariantById.get(id);
+
+export const derivedCanVariantIds = (
+	progress: AchievementProgress
+): string[] => {
+	const derived: string[] = [];
+	for (const variant of CAN_VARIANTS) {
+		const unlocked =
+			(variant.requiresFlavorId !== undefined &&
+				progress.runUpgrades.includes(variant.requiresFlavorId)) ||
+			(variant.requiredPrestigeLevel !== undefined &&
+				(progress.prestigeLevel ?? 0) >= variant.requiredPrestigeLevel);
+		if (unlocked) {
+			derived.push(variant.id);
+		}
+	}
+	return derived;
+};
+
+export const unionCollection = (
+	current: string[],
+	additional: readonly string[]
+): string[] => {
+	const known = new Set(current);
+	let changed = false;
+	for (const id of additional) {
+		if (!known.has(id)) {
+			known.add(id);
+			changed = true;
+		}
+	}
+	return changed ? [...known] : current;
+};
+
+export const collectUnlockedVariants = (
+	progress: AchievementProgress
+): string[] =>
+	unionCollection(progress.collection, derivedCanVariantIds(progress));
+
+export const completedCollectionSets = (
+	collection: string[]
+): CollectionSetId[] => {
+	const owned = new Set(collection);
+	return COLLECTION_SETS.filter((set) =>
+		CAN_VARIANTS.filter((variant) => variant.setId === set.id).every(
+			(variant) => owned.has(variant.id)
+		)
+	).map((set) => set.id);
+};
+
+export const collectionMultiplier = (collection: string[]): number =>
+	1 +
+	completedCollectionSets(collection).reduce(
+		(sum, setId) => sum + (setBonusById.get(setId) ?? 0),
+		0
+	);
+
+export const GOLDEN_RUSH_DROP_BY_REWARD: Record<
+	GoldenRushReward["kind"],
+	string
+> = {
+	click_rush: "golden-storm",
+	lucky: "golden-flash",
+	production_frenzy: "golden-tide",
+};
+
+export const rollGoldenRushDrop = (
+	rewardKind: GoldenRushReward["kind"],
+	randomValue: number,
+	collection: string[]
+): string | null => {
+	if (!(randomValue >= 0 && randomValue < GOLDEN_RUSH_DROP_CHANCE)) {
+		return null;
+	}
+	const variantId = GOLDEN_RUSH_DROP_BY_REWARD[rewardKind];
+	return collection.includes(variantId) ? null : variantId;
+};
 
 export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	bestRunCans: number;
@@ -439,6 +687,7 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	revision: number;
 	runCans: number;
 	serverNow: number;
+	unlockedAchievements: string[];
 	ventedWalls: string[];
 }
 
@@ -558,22 +807,36 @@ export const producerBulkCost = (
 	return clampGameValue(total);
 };
 
-export const cheapestAffordableProducer = (
+// Smart Stocker picks the affordable producer with the best marginal
+// production gain per can (including synergy gains), not the cheapest one.
+export const bestStockerPurchase = (
 	progress: GameProgress,
 	cans: number
 ): ProducerId | null => {
-	let cheapestId: ProducerId | null = null;
-	let cheapestCost = MAX_GAME_VALUE;
+	const baseCps = calculateProductionCps(progress);
+	let bestId: ProducerId | null = null;
+	let bestValue = 0;
 
 	for (const producer of PRODUCERS) {
 		const cost = producerCost(producer.id, progress.producers[producer.id]);
-		if (cost <= cans && cost < cheapestCost) {
-			cheapestCost = cost;
-			cheapestId = producer.id;
+		if (cost > cans) {
+			continue;
+		}
+		const candidate: GameProgress = {
+			...progress,
+			producers: {
+				...progress.producers,
+				[producer.id]: progress.producers[producer.id] + 1,
+			},
+		};
+		const value = (calculateProductionCps(candidate) - baseCps) / cost;
+		if (value > bestValue) {
+			bestValue = value;
+			bestId = producer.id;
 		}
 	}
 
-	return cheapestId;
+	return bestId;
 };
 
 export const goldenUpgradeCost = (
@@ -703,6 +966,12 @@ const LIFETIME_ACHIEVEMENT_TIERS = [
 	{ name: "Sextillion Surge", threshold: 1e21 },
 	{ name: "Septillion Slam", threshold: 1e24 },
 	{ name: "Octillion Overdrive", threshold: 1e27 },
+	{ name: "Nonillion Nightcap", threshold: 1e30 },
+	{ name: "Undecillion Uproar", threshold: 1e36 },
+	{ name: "Tredecillion Tsunami", threshold: 1e42 },
+	{ name: "Heat Death Hydration", threshold: 1e50 },
+	{ name: "Novemdecillion Nirvana", threshold: 1e60 },
+	{ name: "Googol Guzzler", threshold: 1e100 },
 ] as const;
 
 const PRODUCER_COUNT_ACHIEVEMENT_TIERS = [
@@ -713,6 +982,8 @@ const PRODUCER_COUNT_ACHIEVEMENT_TIERS = [
 	{ name: "Beverage Baron", threshold: 500 },
 	{ name: "Can Cartel", threshold: 1000 },
 	{ name: "Galactic Grocer", threshold: 2500 },
+	{ name: "Planetary Distribution", threshold: 5000 },
+	{ name: "Ten Thousand Tabs", threshold: 10_000 },
 ] as const;
 
 const PRESTIGE_ACHIEVEMENT_TIERS = [
@@ -723,6 +994,11 @@ const PRESTIGE_ACHIEVEMENT_TIERS = [
 	{ name: "Double Digits", threshold: 10 },
 	{ name: "Ascension Addict", threshold: 15 },
 	{ name: "Beyond the Beast", threshold: 20 },
+	{ name: "Silver Ascendant", threshold: 25 },
+	{ name: "Ascension Architect", threshold: 30 },
+	{ name: "Beast Reborn", threshold: 40 },
+	{ name: "Half-Century Saint", threshold: 50 },
+	{ name: "Centurion of Cans", threshold: 100 },
 ] as const;
 
 const GOLDEN_CAN_ACHIEVEMENT_TIERS = [
@@ -730,6 +1006,9 @@ const GOLDEN_CAN_ACHIEVEMENT_TIERS = [
 	{ name: "Golden Vault", threshold: 1000 },
 	{ name: "Golden Hoard", threshold: 100_000 },
 	{ name: "Golden Singularity", threshold: 1_000_000 },
+	{ name: "Golden Galaxy", threshold: 1e8 },
+	{ name: "Golden Dimension", threshold: 1e9 },
+	{ name: "Golden Overflow", threshold: 2e9 },
 ] as const;
 
 const RUN_UPGRADE_ACHIEVEMENT_TIERS = [
@@ -737,11 +1016,75 @@ const RUN_UPGRADE_ACHIEVEMENT_TIERS = [
 	{ name: "Connoisseur", threshold: 25 },
 	{ name: "Completionist", threshold: 50 },
 	{ name: "Kitchen Sink", threshold: 100 },
+	{ name: "Shelf Emptier", threshold: 150 },
+	{ name: "Nothing Left to Buy", threshold: RUN_UPGRADES.length },
 ] as const;
 
 const CENTURY_ACHIEVEMENT_THRESHOLD = 100;
+const ENDGAME_PRODUCER_THRESHOLD = MILESTONES.at(-1) ?? 300;
+const GOLDEN_HOARD_THRESHOLD = 100_000;
+const PERFECT_RUN_THRESHOLD = 1e24;
+const finalProducer = PRODUCERS.at(-1) ?? PRODUCERS[0];
 
-export const ACHIEVEMENTS: AchievementDefinition[] = [
+const isGoldenUpgradeMaxed = (
+	progress: AchievementProgress,
+	id: GoldenUpgradeId
+): boolean =>
+	progress.goldenUpgrades[id] >= (goldenUpgradeById.get(id)?.maxRank ?? 1);
+
+const ENDGAME_ACHIEVEMENTS: AchievementDefinition[] = [
+	{
+		description: `Own ${ENDGAME_PRODUCER_THRESHOLD}× ${finalProducer.name}`,
+		id: "beast-legion",
+		isUnlocked: (progress) =>
+			progress.producers[finalProducer.id] >= ENDGAME_PRODUCER_THRESHOLD,
+		name: "Beast Legion",
+	},
+	{
+		description: `Own ${ENDGAME_PRODUCER_THRESHOLD}× of every producer at once`,
+		id: "maxed-lineup",
+		isUnlocked: (progress) =>
+			PRODUCERS.every(
+				({ id }) => progress.producers[id] >= ENDGAME_PRODUCER_THRESHOLD
+			),
+		name: "Maxed Lineup",
+	},
+	{
+		description: "Max out Overcharge Core",
+		id: "overcharge-max",
+		isUnlocked: (progress) => isGoldenUpgradeMaxed(progress, "overcharge-core"),
+		name: "Overcharged",
+	},
+	{
+		description: "Max out Frenzy Core",
+		id: "frenzy-core-max",
+		isUnlocked: (progress) => isGoldenUpgradeMaxed(progress, "frenzy-core"),
+		name: "Frenzy Incarnate",
+	},
+	{
+		description: "Max out every golden upgrade",
+		id: "golden-perfection",
+		isUnlocked: (progress) =>
+			GOLDEN_UPGRADES.every(({ id }) => isGoldenUpgradeMaxed(progress, id)),
+		name: "Golden Perfection",
+	},
+	{
+		description: `Hold ${formatGameNumber(GOLDEN_HOARD_THRESHOLD)} unspent golden cans`,
+		id: "golden-dragon",
+		isUnlocked: (progress) =>
+			(progress.goldenCans ?? 0) >= GOLDEN_HOARD_THRESHOLD,
+		name: "Golden Dragon",
+	},
+	{
+		description: `Earn ${formatGameNumber(PERFECT_RUN_THRESHOLD)} cans in a single run`,
+		id: "perfect-run",
+		isUnlocked: (progress) =>
+			(progress.bestRunCans ?? 0) >= PERFECT_RUN_THRESHOLD,
+		name: "One Perfect Run",
+	},
+];
+
+const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
 	...LIFETIME_ACHIEVEMENT_TIERS.map(({ name, threshold }) => ({
 		description: `Earn ${formatGameNumber(threshold)} lifetime cans`,
 		id: `lifetime-${threshold.toExponential(0)}`,
@@ -784,7 +1127,29 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
 			progress.runUpgrades.length >= threshold,
 		name,
 	})),
+	...ENDGAME_ACHIEVEMENTS,
 ];
+
+// ponytail: unlocks are permanent, so a prestige reset never takes the bonus back
+export const ACHIEVEMENTS: AchievementDefinition[] =
+	ACHIEVEMENT_DEFINITIONS.map((achievement) => ({
+		...achievement,
+		isUnlocked: (progress: AchievementProgress) =>
+			progress.unlockedAchievements?.includes(achievement.id) === true ||
+			achievement.isUnlocked(progress),
+	}));
+
+const achievementIds = new Set(ACHIEVEMENTS.map(({ id }) => id));
+
+export const isAchievementId = (value: unknown): value is string =>
+	typeof value === "string" && achievementIds.has(value);
+
+export const unlockedAchievementIds = (
+	progress: AchievementProgress
+): string[] =>
+	ACHIEVEMENTS.filter((achievement) => achievement.isUnlocked(progress)).map(
+		({ id }) => id
+	);
 
 export const countUnlockedAchievements = (
 	progress: AchievementProgress
@@ -804,12 +1169,22 @@ const achievementMultiplier = (progress: AchievementProgress): number =>
 export const calculateProductionCps = (
 	progress: AchievementProgress
 ): number => {
+	const synergyMultiplier = createInitialProducers();
+	for (const producer of PRODUCERS) {
+		synergyMultiplier[producer.id] = 1;
+	}
+	for (const producer of PRODUCERS) {
+		const target = PRODUCER_SYNERGIES[producer.id];
+		synergyMultiplier[target] +=
+			progress.producers[producer.id] * SYNERGY_BONUS_PER_OWNED;
+	}
 	let producerCps = 0;
 	for (const producer of PRODUCERS) {
 		producerCps +=
 			producer.baseCps *
 			progress.producers[producer.id] *
-			producerMultiplier(progress, producer.id);
+			producerMultiplier(progress, producer.id) *
+			synergyMultiplier[producer.id];
 	}
 	producerCps *= 2 ** countRunUpgradesOfKind(progress, "flavor");
 	producerCps *= 1 + progress.goldenUpgrades["endless-chill"] * 0.15;
@@ -817,6 +1192,7 @@ export const calculateProductionCps = (
 		1 + Math.max(0, progress.totalGoldenCans) * GOLDEN_CAN_PRODUCTION_BONUS;
 	producerCps *= achievementMultiplier(progress);
 	producerCps *= overchargeMultiplier(progress);
+	producerCps *= collectionMultiplier(progress.collection);
 	producerCps *= wallProductionMultiplier(progress);
 	return clampGameValue(producerCps * reactorMultiplier(progress));
 };

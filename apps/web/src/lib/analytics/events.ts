@@ -21,6 +21,8 @@ export const AnalyticsEvents = {
 	game: {
 		achievementUnlocked: "game.achievement.unlocked",
 		clickMilestone: "game.click.milestone",
+		codexSetCompleted: "game.codex.set_completed",
+		codexVariantUnlocked: "game.codex.variant_unlocked",
 		coolingTowerPurchased: "game.coolant.tower_purchased",
 		error: "game.error",
 		frenzyEnded: "game.frenzy.ended",

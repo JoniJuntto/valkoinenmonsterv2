@@ -13,6 +13,7 @@ import { user } from "./auth";
 export const gameState = pgTable("game_state", {
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
+	collection: jsonb("collection").$type<string[]>().notNull().default([]),
 	coolant: doublePrecision("coolant").default(0).notNull(),
 	coolantTowers: integer("coolant_towers").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })
@@ -44,6 +45,10 @@ export const gameState = pgTable("game_state", {
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
 	totalGoldenCans: doublePrecision("total_golden_cans").default(0).notNull(),
+	unlockedAchievements: jsonb("unlocked_achievements")
+		.$type<string[]>()
+		.default([])
+		.notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true })
 		.defaultNow()
 		.$onUpdate(() => new Date())

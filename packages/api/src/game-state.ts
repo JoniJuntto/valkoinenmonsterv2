@@ -13,6 +13,8 @@ import {
 	GOLDEN_UPGRADES,
 	type GoldenRushBuffKind,
 	type GoldenUpgradeRanks,
+	isAchievementId,
+	isCanVariantId,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
 	isWallId,
@@ -119,6 +121,19 @@ export const normalizePersistedGameState = (
 		goldenCans,
 		clampGameCounter(state.totalGoldenCans)
 	);
+	const normalizeCollection = (value: unknown): string[] => {
+		if (!Array.isArray(value)) {
+			return [];
+		}
+		return [
+			...new Set(
+				value.filter(
+					(id): id is string => typeof id === "string" && isCanVariantId(id)
+				)
+			),
+		];
+	};
+
 	const goldenUpgrades = normalizeGoldenUpgrades(state.goldenUpgrades);
 	const goldenRushBuffKind =
 		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
@@ -136,6 +151,7 @@ export const normalizePersistedGameState = (
 		...state,
 		bestRunCans,
 		cans,
+		collection: normalizeCollection(state.collection),
 		coolant: clampGameValue(state.coolant),
 		coolantTowers: clampGameCounter(state.coolantTowers),
 		frenzyEndsAt: normalizeTimer(
@@ -175,6 +191,9 @@ export const normalizePersistedGameState = (
 			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
 			: [],
 		totalGoldenCans,
+		unlockedAchievements: Array.isArray(state.unlockedAchievements)
+			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
+			: [],
 		ventedWalls: normalizeVentedWalls(state.ventedWalls),
 	};
 };
@@ -183,6 +202,21 @@ const invariant = (condition: boolean, message: string): void => {
 	if (!condition) {
 		throw new Error(`Progression invariant failed: ${message}`);
 	}
+};
+
+const assertWallStateInvariants = (state: MutableGameState): void => {
+	invariant(
+		Number.isFinite(state.coolant) &&
+			state.coolant >= 0 &&
+			state.coolant <= MAX_GAME_VALUE,
+		"coolant must be finite and non-negative"
+	);
+	invariant(
+		Number.isInteger(state.coolantTowers) &&
+			state.coolantTowers >= 0 &&
+			state.coolantTowers <= MAX_PERSISTED_COUNTER,
+		"cooling tower count must be valid"
+	);
 };
 
 export const assertProgressionInvariants = (
@@ -234,6 +268,12 @@ export const assertProgressionInvariants = (
 		"run upgrades must be known and unique"
 	);
 	invariant(
+		state.unlockedAchievements.length ===
+			new Set(state.unlockedAchievements).size &&
+			state.unlockedAchievements.every(isAchievementId),
+		"unlocked achievements must be known and unique"
+	);
+	invariant(
 		Object.keys(state.goldenUpgrades).length === GOLDEN_UPGRADES.length &&
 			GOLDEN_UPGRADES.every(({ id, maxRank }) => {
 				const rank = state.goldenUpgrades[id];
@@ -242,23 +282,17 @@ export const assertProgressionInvariants = (
 		"golden upgrade ranks must match the catalog"
 	);
 	invariant(
+		state.collection.length === new Set(state.collection).size &&
+			state.collection.every(isCanVariantId),
+		"collection variants must be known and unique"
+	);
+	invariant(
 		Number.isFinite(state.manualClickBudget) &&
 			state.manualClickBudget >= 0 &&
 			state.manualClickBudget <= MAX_MANUAL_CLICK_BUDGET,
 		"manual click budget must be bounded"
 	);
-	invariant(
-		Number.isFinite(state.coolant) &&
-			state.coolant >= 0 &&
-			state.coolant <= MAX_GAME_VALUE,
-		"coolant must be finite and non-negative"
-	);
-	invariant(
-		Number.isInteger(state.coolantTowers) &&
-			state.coolantTowers >= 0 &&
-			state.coolantTowers <= MAX_PERSISTED_COUNTER,
-		"cooling tower count must be valid"
-	);
+	assertWallStateInvariants(state);
 	const wallIdOrder = WALLS.map(({ id }) => id);
 	invariant(
 		state.ventedWalls.length <= wallIdOrder.length &&

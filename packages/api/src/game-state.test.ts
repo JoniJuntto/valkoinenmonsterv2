@@ -17,6 +17,7 @@ import {
 const createRow = (): GameStateRow => ({
 	bestRunCans: 0,
 	cans: 0,
+	collection: [],
 	coolant: 0,
 	coolantTowers: 0,
 	createdAt: new Date(0),
@@ -38,6 +39,7 @@ const createRow = (): GameStateRow => ({
 	runUpgrades: [],
 	shadowBanned: false,
 	totalGoldenCans: 0,
+	unlockedAchievements: [],
 	updatedAt: new Date(0),
 	userId: "user",
 	ventedWalls: [],
