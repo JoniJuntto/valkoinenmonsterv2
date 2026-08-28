@@ -15,6 +15,7 @@ export const ACHIEVEMENT_PRODUCTION_BONUS = 0.01;
 export const FRENZY_CORE_BONUS = 5;
 export const FRENZY_CHRONOMETER_BONUS_MS = 2000;
 export const OVERCHARGE_MULTIPLIER = 2;
+export const GOLDEN_RUSH_DROP_CHANCE = 0.25;
 
 export const GOLDEN_RUSH_MIN_DELAY_MS = 180_000;
 export const GOLDEN_RUSH_MAX_DELAY_MS = 420_000;
@@ -252,6 +253,23 @@ export const FLAVOR_UPGRADES: RunUpgradeDefinition[] = [
 	kind: "flavor",
 }));
 
+const FLAVOR_VARIANT_COLORS: Record<string, string> = {
+	"mango-loco": "#FBBF24",
+	"pipeline-punch": "#FB923C",
+	"ultra-black": "#1A1A1A",
+	"ultra-blue": "#35A7FF",
+	"ultra-fiesta": "#F97316",
+	"ultra-gold": "#F2C14E",
+	"ultra-paradise": "#2EE6A8",
+	"ultra-peachy-keen": "#FDBA8C",
+	"ultra-red": "#EF4444",
+	"ultra-rosa": "#F472B6",
+	"ultra-strawberry-dreams": "#F87171",
+	"ultra-violet": "#8B5CF6",
+	"ultra-watermelon": "#FB7185",
+	"ultra-white": "#F5F5F5",
+};
+
 export const MILESTONES = [10, 25, 50, 100, 150, 200, 250, 300] as const;
 const MILESTONE_COST_MULTIPLIERS = [
 	30, 250, 2500, 25_000, 250_000, 2_500_000, 25_000_000, 250_000_000,
@@ -388,6 +406,7 @@ export interface GoldenRushBuffState {
 }
 
 export interface GameProgress {
+	collection: string[];
 	goldenUpgrades: GoldenUpgradeRanks;
 	producers: ProducerCounts;
 	runUpgrades: string[];
@@ -401,6 +420,201 @@ export interface AchievementProgress extends GameProgress {
 	prestigeLevel?: number;
 	unlockedAchievements?: string[];
 }
+
+export type CollectionSetId =
+	| "flavor-family"
+	| "golden-rush"
+	| "world-exclusives";
+
+export interface CanVariantDefinition {
+	color: string;
+	description: string;
+	id: string;
+	name: string;
+	requiredPrestigeLevel?: number;
+	requiresFlavorId?: string;
+	setId: CollectionSetId;
+}
+
+export const CAN_VARIANTS: CanVariantDefinition[] = [
+	...FLAVOR_UPGRADES.map((flavor) => ({
+		color: FLAVOR_VARIANT_COLORS[flavor.id] ?? "#9CA3AF",
+		description: `Buy the ${flavor.name} upgrade`,
+		id: flavor.id,
+		name: flavor.name,
+		requiresFlavorId: flavor.id,
+		setId: "flavor-family" as const,
+	})),
+	{
+		color: "#FFD700",
+		description: "Drop from a Lucky Can golden rush",
+		id: "golden-flash",
+		name: "Golden Flash",
+		setId: "golden-rush",
+	},
+	{
+		color: "#FFA500",
+		description: "Drop from a Click Rush golden rush",
+		id: "golden-storm",
+		name: "Golden Storm",
+		setId: "golden-rush",
+	},
+	{
+		color: "#EAB308",
+		description: "Drop from a Production Frenzy golden rush",
+		id: "golden-tide",
+		name: "Golden Tide",
+		setId: "golden-rush",
+	},
+	{
+		color: "#A3E635",
+		description: "Reach prestige level 1",
+		id: "world-1",
+		name: "First Steps",
+		requiredPrestigeLevel: 1,
+		setId: "world-exclusives",
+	},
+	{
+		color: "#38BDF8",
+		description: "Reach prestige level 5",
+		id: "world-5",
+		name: "Rift Reserve",
+		requiredPrestigeLevel: 5,
+		setId: "world-exclusives",
+	},
+	{
+		color: "#A855F7",
+		description: "Reach prestige level 10",
+		id: "world-10",
+		name: "Singularity Stock",
+		requiredPrestigeLevel: 10,
+		setId: "world-exclusives",
+	},
+	{
+		color: "#F43F5E",
+		description: "Reach prestige level 25",
+		id: "world-25",
+		name: "Beast Sovereign",
+		requiredPrestigeLevel: 25,
+		setId: "world-exclusives",
+	},
+];
+
+const canVariantById = new Map(
+	CAN_VARIANTS.map((variant) => [variant.id, variant])
+);
+
+export interface CollectionSetDefinition {
+	bonus: number;
+	description: string;
+	id: CollectionSetId;
+	name: string;
+}
+
+export const COLLECTION_SETS: CollectionSetDefinition[] = [
+	{
+		bonus: 0.25,
+		description: "+25% production",
+		id: "flavor-family",
+		name: "Flavor Family",
+	},
+	{
+		bonus: 0.5,
+		description: "+50% production",
+		id: "golden-rush",
+		name: "Golden Rush Drops",
+	},
+	{
+		bonus: 1,
+		description: "+100% production",
+		id: "world-exclusives",
+		name: "World Exclusives",
+	},
+];
+
+const setBonusById = new Map(COLLECTION_SETS.map((set) => [set.id, set.bonus]));
+
+export const isCanVariantId = (value: string): boolean =>
+	canVariantById.has(value);
+
+export const getCanVariant = (id: string): CanVariantDefinition | undefined =>
+	canVariantById.get(id);
+
+export const derivedCanVariantIds = (
+	progress: AchievementProgress
+): string[] => {
+	const derived: string[] = [];
+	for (const variant of CAN_VARIANTS) {
+		const unlocked =
+			(variant.requiresFlavorId !== undefined &&
+				progress.runUpgrades.includes(variant.requiresFlavorId)) ||
+			(variant.requiredPrestigeLevel !== undefined &&
+				(progress.prestigeLevel ?? 0) >= variant.requiredPrestigeLevel);
+		if (unlocked) {
+			derived.push(variant.id);
+		}
+	}
+	return derived;
+};
+
+export const unionCollection = (
+	current: string[],
+	additional: readonly string[]
+): string[] => {
+	const known = new Set(current);
+	let changed = false;
+	for (const id of additional) {
+		if (!known.has(id)) {
+			known.add(id);
+			changed = true;
+		}
+	}
+	return changed ? [...known] : current;
+};
+
+export const collectUnlockedVariants = (
+	progress: AchievementProgress
+): string[] =>
+	unionCollection(progress.collection, derivedCanVariantIds(progress));
+
+export const completedCollectionSets = (
+	collection: string[]
+): CollectionSetId[] => {
+	const owned = new Set(collection);
+	return COLLECTION_SETS.filter((set) =>
+		CAN_VARIANTS.filter((variant) => variant.setId === set.id).every(
+			(variant) => owned.has(variant.id)
+		)
+	).map((set) => set.id);
+};
+
+export const collectionMultiplier = (collection: string[]): number =>
+	1 +
+	completedCollectionSets(collection).reduce(
+		(sum, setId) => sum + (setBonusById.get(setId) ?? 0),
+		0
+	);
+
+export const GOLDEN_RUSH_DROP_BY_REWARD: Record<
+	GoldenRushReward["kind"],
+	string
+> = {
+	click_rush: "golden-storm",
+	lucky: "golden-flash",
+	production_frenzy: "golden-tide",
+};
+
+export const rollGoldenRushDrop = (
+	rewardKind: GoldenRushReward["kind"],
+	randomValue: number,
+	collection: string[]
+): string | null => {
+	if (!(randomValue >= 0 && randomValue < GOLDEN_RUSH_DROP_CHANCE)) {
+		return null;
+	}
+	const variantId = GOLDEN_RUSH_DROP_BY_REWARD[rewardKind];
+	return collection.includes(variantId) ? null : variantId;
+};
 
 export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	bestRunCans: number;
@@ -873,6 +1087,7 @@ export const calculateProductionCps = (
 		1 + Math.max(0, progress.totalGoldenCans) * GOLDEN_CAN_PRODUCTION_BONUS;
 	producerCps *= achievementMultiplier(progress);
 	producerCps *= overchargeMultiplier(progress);
+	producerCps *= collectionMultiplier(progress.collection);
 	return clampGameValue(producerCps * reactorMultiplier(progress));
 };
 
