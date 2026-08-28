@@ -3,19 +3,29 @@ import { describe, expect, test } from "bun:test";
 import {
 	acceptManualClicks,
 	bestStockerPurchase,
+	CAN_VARIANTS,
+	COLLECTION_SETS,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
+	calculateProductionCps,
+	cheapestAffordableProducer,
 	clampGameValue,
+	collectionMultiplier,
+	collectUnlockedVariants,
+	completedCollectionSets,
 	countUnlockedAchievements,
 	createHeadStartProducers,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	derivedCanVariantIds,
+	FLAVOR_UPGRADES,
 	FRENZY_DURATION_MS,
 	formatGameNumber,
 	frenzyDurationMs,
 	frenzyMultiplier,
 	type GameProgress,
+	GOLDEN_RUSH_DROP_CHANCE,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_RUSH_MIN_DELAY_MS,
 	GOLDEN_UPGRADES,
@@ -35,11 +45,14 @@ import {
 	productionTimeMs,
 	RUN_UPGRADES,
 	rollGoldenRushDelayMs,
+	rollGoldenRushDrop,
 	rollGoldenRushReward,
 	unlockedAchievementIds,
+	unionCollection,
 } from "./game";
 
 const createProgress = (): GameProgress => ({
+	collection: [],
 	goldenUpgrades: createInitialGoldenUpgrades(),
 	producers: createInitialProducers(),
 	runUpgrades: [],
@@ -363,5 +376,91 @@ describe("validated accrual", () => {
 		expect(calculateIdleGain(progress, 10_000, 2000, 1)).toBe(28);
 		expect(calculateIdleGain(progress, 10_000, 2000, 2)).toBe(56);
 		expect(calculateIdleGain(progress, 10_000, 2000, 0.1)).toBeCloseTo(2.8);
+	});
+});
+
+describe("collection codex", () => {
+	test("derives flavor and prestige-world unlocks without touching drops", () => {
+		const progress = createProgress();
+		expect(derivedCanVariantIds(progress)).toEqual([]);
+		progress.runUpgrades.push("ultra-white");
+		expect(derivedCanVariantIds(progress)).toEqual(["ultra-white"]);
+		progress.prestigeLevel = 5;
+		expect(derivedCanVariantIds(progress)).toEqual([
+			"ultra-white",
+			"world-1",
+			"world-5",
+		]);
+		progress.prestigeLevel = 4;
+		expect(derivedCanVariantIds(progress)).toEqual(["ultra-white", "world-1"]);
+	});
+
+	test("collects unlocks without duplicating known variants", () => {
+		const progress = createProgress();
+		progress.collection = ["ultra-white"];
+		progress.runUpgrades.push("ultra-white", "ultra-blue");
+		expect(collectUnlockedVariants(progress)).toEqual([
+			"ultra-white",
+			"ultra-blue",
+		]);
+		const same = ["ultra-white", "ultra-blue"];
+		expect(unionCollection(same, ["ultra-white"])).toBe(same);
+	});
+
+	test("completing sets grants stacking production bonuses", () => {
+		expect(collectionMultiplier([])).toBe(1);
+		const flavorIds = CAN_VARIANTS.filter(
+			({ setId }) => setId === "flavor-family"
+		).map(({ id }) => id);
+		expect(completedCollectionSets(flavorIds.slice(0, 5))).toEqual([]);
+		expect(collectionMultiplier(flavorIds)).toBe(1.25);
+		const rushIds = CAN_VARIANTS.filter(
+			({ setId }) => setId === "golden-rush"
+		).map(({ id }) => id);
+		const worldIds = CAN_VARIANTS.filter(
+			({ setId }) => setId === "world-exclusives"
+		).map(({ id }) => id);
+		expect(collectionMultiplier([...flavorIds, ...rushIds])).toBe(1.75);
+		expect(collectionMultiplier([...flavorIds, ...rushIds, ...worldIds])).toBe(
+			2.75
+		);
+		expect(
+			completedCollectionSets([...flavorIds, ...rushIds, ...worldIds])
+		).toEqual(COLLECTION_SETS.map(({ id }) => id));
+	});
+
+	test("codex bonus multiplies production", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		const base = calculateProductionCps(progress);
+		progress.collection = CAN_VARIANTS.map(({ id }) => id);
+		expect(calculateProductionCps(progress)).toBeCloseTo(base * 2.75);
+	});
+
+	test("rolls golden rush drops per reward kind and ownership", () => {
+		expect(rollGoldenRushDrop("lucky", 0.1, [])).toBe("golden-flash");
+		expect(rollGoldenRushDrop("click_rush", 0.1, [])).toBe("golden-storm");
+		expect(rollGoldenRushDrop("production_frenzy", 0.1, [])).toBe(
+			"golden-tide"
+		);
+		expect(rollGoldenRushDrop("lucky", GOLDEN_RUSH_DROP_CHANCE, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", 0.5, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", -1, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", Number.NaN, [])).toBeNull();
+		expect(rollGoldenRushDrop("lucky", 0.1, ["golden-flash"])).toBeNull();
+	});
+
+	test("keeps the codex catalog consistent", () => {
+		const variantIds = new Set(CAN_VARIANTS.map(({ id }) => id));
+		expect(variantIds.size).toBe(CAN_VARIANTS.length);
+		const setIds = new Set(COLLECTION_SETS.map(({ id }) => id));
+		const flavorCount = FLAVOR_UPGRADES.length;
+		expect(CAN_VARIANTS.length).toBe(flavorCount + 3 + 4);
+		for (const variant of CAN_VARIANTS) {
+			expect(setIds.has(variant.setId)).toBe(true);
+		}
+		for (const flavor of FLAVOR_UPGRADES) {
+			expect(variantIds.has(flavor.id)).toBe(true);
+		}
 	});
 });

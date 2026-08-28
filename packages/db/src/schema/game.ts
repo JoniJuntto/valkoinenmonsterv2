@@ -13,6 +13,7 @@ import { user } from "./auth";
 export const gameState = pgTable("game_state", {
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
+	collection: jsonb("collection").$type<string[]>().notNull().default([]),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),

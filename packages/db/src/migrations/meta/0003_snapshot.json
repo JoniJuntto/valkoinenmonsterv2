@@ -1,5 +1,5 @@
 {
-  "id": "0a84d17c-09f2-4176-ad1d-b47b9062f87d",
+  "id": "a3909876-e16c-441a-8ee1-d9b56d4f3bb0",
   "prevId": "13666888-7b2c-4c75-9072-4d1f86b6b03a",
   "version": "7",
   "dialect": "postgresql",
@@ -372,6 +372,13 @@
           "notNull": true,
           "default": 0
         },
+        "collection": {
+          "name": "collection",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -495,13 +502,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "unlocked_achievements": {
-          "name": "unlocked_achievements",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
         },
         "updated_at": {
           "name": "updated_at",
