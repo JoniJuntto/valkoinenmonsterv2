@@ -20,9 +20,12 @@ export const gameState = pgTable("game_state", {
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
 	collection: jsonb("collection").$type<string[]>().notNull().default([]),
+	coolant: doublePrecision("coolant").default(0).notNull(),
+	coolantTowers: integer("coolant_towers").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
+	draftTier: integer("draft_tier").default(0).notNull(),
 	frenzyEndsAt: timestamp("frenzy_ends_at", { withTimezone: true }),
 	frenzyStacks: integer("frenzy_stacks").default(0).notNull(),
 	goldenCans: doublePrecision("golden_cans").default(0).notNull(),
@@ -47,6 +50,7 @@ export const gameState = pgTable("game_state", {
 	producers: jsonb("producers").$type<Record<string, number>>().notNull(),
 	revision: integer("revision").default(0).notNull(),
 	runCans: doublePrecision("run_cans").default(0).notNull(),
+	runDraft: jsonb("run_draft").$type<string[]>(),
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
 	totalAscensionSparks: doublePrecision("total_ascension_sparks")
@@ -64,6 +68,7 @@ export const gameState = pgTable("game_state", {
 	userId: text("user_id")
 		.primaryKey()
 		.references(() => user.id, { onDelete: "cascade" }),
+	ventedWalls: jsonb("vented_walls").$type<string[]>().notNull().default([]),
 });
 
 export type GameStateRow = typeof gameState.$inferSelect;

@@ -6,12 +6,14 @@ import {
 	ASCENSION_NODES,
 	type AscensionNodeId,
 	activeFrenzyMultiplier,
+	activeWall,
 	ascensionNodeCost,
 	ascensionNodeUnlocked,
 	bestStockerPurchase,
 	CAN_VARIANTS,
 	CLICK_RUSH_MULTIPLIER,
 	COLLECTION_SETS,
+	COOLANT_PER_TOWER_PER_SEC,
 	type CollectionSetId,
 	calculateClickValue,
 	calculateCps,
@@ -19,15 +21,20 @@ import {
 	clickBuffMultiplier,
 	collectionMultiplier,
 	completedCollectionSets,
+	coolantPerSecond,
+	coolingTowerCost,
 	countUnlockedAchievements,
+	FLAVOR_UPGRADES,
 	formatGameNumber,
 	frenzyDurationMs,
 	type GameSnapshot,
 	GOLDEN_CAN_BASE,
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
+	getRunUpgrade,
 	goldenUpgradeCost,
 	goldenUpgradeUnlockLevel,
+	isDraftOnlyKind,
 	isGoldenUpgradeId,
 	isWorldUnlocked,
 	MAX_FRENZY_STACKS,
@@ -43,6 +50,7 @@ import {
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
 	SYNERGY_BONUS_PER_OWNED,
+	WALLS,
 	WORLDS,
 	type WorldDefinition,
 } from "@valkoinenmonsterv2/api/game";
@@ -139,6 +147,9 @@ type MutationActionName =
 	| "sync"
 	| "buy_producer"
 	| "buy_upgrade"
+	| "pick_draft"
+	| "buy_cooling_tower"
+	| "vent_wall"
 	| "buy_ascension_node"
 	| "claim_golden_rush"
 	| "trigger_frenzy"
@@ -147,6 +158,7 @@ type MutationActionName =
 interface MutationOptions {
 	action: MutationActionName;
 	nodeId?: string;
+	optionIndex?: number;
 	producerId?: ProducerId;
 	producerQuantity?: number;
 	producerSource?: "manual" | "smart_stocker";
@@ -215,6 +227,23 @@ const trackMutationSuccess = (
 			}
 			break;
 		}
+		case "pick_draft": {
+			const optionId = before.runDraft?.[options.optionIndex ?? -1];
+			const card = optionId ? getRunUpgrade(optionId) : undefined;
+			if (!card) {
+				break;
+			}
+			track(AnalyticsEvents.game.draftPicked, {
+				cost: card.cost,
+				option_id: card.id,
+				option_kind: card.kind,
+				tier: before.draftTier,
+			});
+			if (card.kind === "grant") {
+				toast.success(card.name, { description: card.description });
+			}
+			break;
+		}
 		case "buy_ascension_node": {
 			if (!options.nodeId) {
 				break;
@@ -239,6 +268,30 @@ const trackMutationSuccess = (
 				run_cans_bucket: bucketCans(before.runCans),
 			});
 			setUserTraits({ prestige_level: projected.prestigeLevel });
+			break;
+		}
+		case "buy_cooling_tower": {
+			track(AnalyticsEvents.game.coolingTowerPurchased, {
+				cost: coolingTowerCost(Math.max(0, projected.coolantTowers - 1)),
+				owned_after: projected.coolantTowers,
+				run_cans_bucket: bucketCans(projected.runCans),
+			});
+			break;
+		}
+		case "vent_wall": {
+			const ventedWall = WALLS.find(
+				({ id }) =>
+					!before.ventedWalls.includes(id) && projected.ventedWalls.includes(id)
+			);
+			if (!ventedWall) {
+				break;
+			}
+			track(AnalyticsEvents.game.wallVented, {
+				prestige_level: projected.prestigeLevel,
+				run_cans_bucket: bucketCans(projected.runCans),
+				vent_cost: ventedWall.ventCost,
+				wall_id: ventedWall.id,
+			});
 			break;
 		}
 		case "trigger_frenzy": {
@@ -289,6 +342,9 @@ const selectVisibleRunUpgrades = (
 	const producersWithMilestone = new Set<ProducerId>();
 	for (const upgrade of runUpgradesByCost) {
 		if (game.runUpgrades.includes(upgrade.id)) {
+			continue;
+		}
+		if (isDraftOnlyKind(upgrade.kind)) {
 			continue;
 		}
 		if (upgrade.kind === "milestone") {
@@ -594,6 +650,7 @@ interface ShopCardProps {
 	onBuyProducer: (producerId: ProducerId) => void;
 	onBuyUpgrade: (upgradeId: string) => void;
 	onChangeBuyQuantity: (quantity: BuyQuantity) => void;
+	onPickDraft: (optionIndex: number) => void;
 	onToggleSmartStocker: () => void;
 }
 
@@ -606,6 +663,7 @@ const ShopCard = ({
 	onBuyProducer,
 	onBuyUpgrade,
 	onChangeBuyQuantity,
+	onPickDraft,
 	onToggleSmartStocker,
 }: ShopCardProps) => {
 	const handleProducerClick = useCallback(
@@ -637,6 +695,15 @@ const ShopCard = ({
 		},
 		[onBuyUpgrade]
 	);
+	const handleDraftClick = useCallback(
+		(event: MouseEvent<HTMLButtonElement>) => {
+			const optionIndex = Number(event.currentTarget.dataset.optionIndex);
+			if (Number.isInteger(optionIndex)) {
+				onPickDraft(optionIndex);
+			}
+		},
+		[onPickDraft]
+	);
 
 	const handleAscensionClick = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
@@ -660,6 +727,48 @@ const ShopCard = ({
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="monster-shop flex max-h-[75svh] flex-col gap-6 overflow-y-auto">
+				{game.runDraft ? (
+					<section className="flex flex-col gap-2 bg-monster-gold/10 p-3 ring-2 ring-monster-gold/60">
+						<h2 className="font-display text-base uppercase tracking-wide">
+							Flavor draft
+						</h2>
+						<p className="text-muted-foreground">
+							Pick exactly one — the other two cards are gone for this run.
+						</p>
+						<ul className="flex flex-col gap-2">
+							{game.runDraft.map((optionId, optionIndex) => {
+								const card = getRunUpgrade(optionId);
+								if (!card) {
+									return null;
+								}
+								const isFlavor = card.kind === "flavor";
+								const isAffordable = game.cans >= card.cost;
+								return (
+									<li className="bg-muted/30 p-3" key={optionId}>
+										<div className="flex items-center justify-between gap-3">
+											<div>
+												<h3 className="font-medium">{card.name}</h3>
+												<p className="text-muted-foreground">
+													{card.description}
+												</p>
+											</div>
+											<Button
+												data-option-index={optionIndex}
+												disabled={isSaving || !isAffordable}
+												onClick={handleDraftClick}
+												size="sm"
+												variant={isAffordable ? "default" : "outline"}
+											>
+												{isFlavor ? formatGameNumber(card.cost) : "Free"}
+											</Button>
+										</div>
+									</li>
+								);
+							})}
+						</ul>
+					</section>
+				) : null}
+
 				<section className="flex flex-col gap-2">
 					<div className="flex items-center justify-between gap-2">
 						<h2 className="font-display text-base uppercase tracking-wide">
@@ -743,6 +852,13 @@ const ShopCard = ({
 					<h2 className="font-display text-base uppercase tracking-wide">
 						Run upgrades
 					</h2>
+					{!game.runDraft && game.draftTier < FLAVOR_UPGRADES.length ? (
+						<p className="text-muted-foreground">
+							Next flavor draft unlocks at{" "}
+							{formatGameNumber(FLAVOR_UPGRADES[game.draftTier]?.cost ?? 0)}{" "}
+							cans.
+						</p>
+					) : null}
 					<ul className="flex flex-col gap-2">
 						{selectVisibleRunUpgrades(game).map((upgrade) => {
 							const producerOwned = upgrade.producerId
@@ -1065,6 +1181,89 @@ const AchievementsCard = ({ game }: AchievementsCardProps) => {
 	);
 };
 
+const COOLANT_TEASER_THRESHOLD = WALLS[0].threshold / 10;
+
+interface CoolantCardProps {
+	game: GameSnapshot;
+	isSaving: boolean;
+	onBuyCoolingTower: () => void;
+	onVentWall: () => void;
+}
+
+const CoolantCard = ({
+	game,
+	isSaving,
+	onBuyCoolingTower,
+	onVentWall,
+}: CoolantCardProps) => {
+	const wall = activeWall(game);
+	const towerCost = coolingTowerCost(game.coolantTowers);
+	const isVisible =
+		wall !== null ||
+		game.coolant > 0 ||
+		game.coolantTowers > 0 ||
+		game.runCans >= COOLANT_TEASER_THRESHOLD;
+	if (!isVisible) {
+		return null;
+	}
+	const coolantRate = coolantPerSecond(game);
+	return (
+		<Card className="order-6 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Coolant
+				</CardTitle>
+				<CardDescription>
+					{wall
+						? wall.description
+						: "Cooling towers produce coolant for the walls ahead."}
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="flex flex-col gap-3">
+				{wall ? (
+					<div className="bg-destructive/10 p-3">
+						<h3 className="font-bold text-destructive">{wall.name} active</h3>
+						<Button
+							className="mt-2 w-full"
+							data-wall-id={wall.id}
+							disabled={isSaving || game.coolant < wall.ventCost}
+							onClick={onVentWall}
+							variant={game.coolant >= wall.ventCost ? "default" : "outline"}
+						>
+							Vent for {formatGameNumber(wall.ventCost)} coolant
+						</Button>
+					</div>
+				) : null}
+				<div className="flex items-baseline justify-between gap-2">
+					<span className="font-bold">Coolant</span>
+					<span className="tabular-nums">
+						{formatGameNumber(game.coolant)}
+						{coolantRate > 0 ? ` (+${formatGameNumber(coolantRate)}/s)` : ""}
+					</span>
+				</div>
+				<div className="flex items-center justify-between gap-3 bg-muted/30 p-3">
+					<div>
+						<h3 className="font-medium">Cooling Tower</h3>
+						<p className="text-muted-foreground">
+							{game.coolantTowers} owned ·{" "}
+							{formatGameNumber(COOLANT_PER_TOWER_PER_SEC)} coolant/s each
+						</p>
+					</div>
+					<Button
+						data-cooling-tower=""
+						disabled={isSaving || game.cans < towerCost}
+						onClick={onBuyCoolingTower}
+						size="sm"
+						variant={game.cans >= towerCost ? "default" : "outline"}
+					>
+						{formatGameNumber(towerCost)}
+					</Button>
+				</div>
+			</CardContent>
+		</Card>
+	);
+};
+
 interface CodexCardProps {
 	game: GameSnapshot;
 }
@@ -1076,7 +1275,7 @@ const CodexCard = ({ game }: CodexCardProps) => {
 		(collectionMultiplier(game.collection) - 1) * 100
 	);
 	return (
-		<Card className="order-6 self-start xl:col-start-1">
+		<Card className="order-7 self-start xl:col-start-1">
 			<CardHeader>
 				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
 					Codex
@@ -1258,6 +1457,9 @@ export const MonsterGame = () => {
 	const { mutateAsync: buyUpgradeMutation } = useMutation(
 		trpc.game.buyUpgrade.mutationOptions()
 	);
+	const { mutateAsync: pickDraftMutation } = useMutation(
+		trpc.game.pickDraft.mutationOptions()
+	);
 	const { mutateAsync: buyAscensionNodeMutation } = useMutation(
 		trpc.game.buyAscensionNode.mutationOptions()
 	);
@@ -1269,6 +1471,12 @@ export const MonsterGame = () => {
 	);
 	const { mutateAsync: claimGoldenRushMutation } = useMutation(
 		trpc.game.claimGoldenRush.mutationOptions()
+	);
+	const { mutateAsync: buyCoolingTowerMutation } = useMutation(
+		trpc.game.buyCoolingTower.mutationOptions()
+	);
+	const { mutateAsync: ventWallMutation } = useMutation(
+		trpc.game.ventWall.mutationOptions()
 	);
 
 	const updateGame = useCallback(
@@ -1332,6 +1540,36 @@ export const MonsterGame = () => {
 			});
 		}
 	}, [game]);
+
+	const wall = game ? activeWall(game) : null;
+	const activeWallId = wall ? wall.id : null;
+	const lastActiveWallIdRef = useRef<string | null | undefined>(undefined);
+	useEffect(() => {
+		if (lastActiveWallIdRef.current === undefined) {
+			lastActiveWallIdRef.current = activeWallId;
+			return;
+		}
+		if (activeWallId === lastActiveWallIdRef.current) {
+			return;
+		}
+		lastActiveWallIdRef.current = activeWallId;
+		if (!(game && activeWallId)) {
+			return;
+		}
+		const triggeredWall = WALLS.find(({ id }) => id === activeWallId);
+		if (!triggeredWall) {
+			return;
+		}
+		toast.warning(`${triggeredWall.name}!`, {
+			description: triggeredWall.description,
+			duration: 12_000,
+		});
+		track(AnalyticsEvents.game.wallReached, {
+			prestige_level: game.prestigeLevel,
+			run_cans_bucket: bucketCans(game.runCans),
+			wall_id: triggeredWall.id,
+		});
+	}, [activeWallId, game]);
 
 	useEffect(() => {
 		if (isSessionPending || session || anonymousSignInStarted.current) {
@@ -1604,6 +1842,22 @@ export const MonsterGame = () => {
 		[refetchState]
 	);
 
+	const buyCoolingTowerNow = useCallback(
+		() =>
+			performMutation((input) => buyCoolingTowerMutation(input), {
+				action: "buy_cooling_tower",
+			}),
+		[buyCoolingTowerMutation, performMutation]
+	);
+
+	const ventWallNow = useCallback(
+		() =>
+			performMutation((input) => ventWallMutation(input), {
+				action: "vent_wall",
+			}),
+		[performMutation, ventWallMutation]
+	);
+
 	const syncNow = useCallback(
 		() =>
 			performMutation((input) => syncGame(input), {
@@ -1638,6 +1892,15 @@ export const MonsterGame = () => {
 				upgradeId,
 			}),
 		[buyUpgradeMutation, performMutation]
+	);
+
+	const pickDraftNow = useCallback(
+		(optionIndex: number) =>
+			performMutation((input) => pickDraftMutation({ ...input, optionIndex }), {
+				action: "pick_draft",
+				optionIndex,
+			}),
+		[pickDraftMutation, performMutation]
 	);
 
 	const buyAscensionNodeNow = useCallback(
@@ -1876,6 +2139,12 @@ export const MonsterGame = () => {
 		},
 		[buyUpgradeNow]
 	);
+	const handlePickDraft = useCallback(
+		(optionIndex: number) => {
+			pickDraftNow(optionIndex).catch(() => undefined);
+		},
+		[pickDraftNow]
+	);
 	const handleBuyAscensionNode = useCallback(
 		(nodeId: string) => {
 			buyAscensionNodeNow(nodeId).catch(() => undefined);
@@ -1885,6 +2154,12 @@ export const MonsterGame = () => {
 	const handleClaimGoldenRush = useCallback(() => {
 		claimGoldenRushNow().catch(() => undefined);
 	}, [claimGoldenRushNow]);
+	const handleBuyCoolingTower = useCallback(() => {
+		buyCoolingTowerNow().catch(() => undefined);
+	}, [buyCoolingTowerNow]);
+	const handleVentWall = useCallback(() => {
+		ventWallNow().catch(() => undefined);
+	}, [ventWallNow]);
 
 	if (isSessionPending || !session || isStateLoading || !game) {
 		return <GameLoading />;
@@ -1924,6 +2199,7 @@ export const MonsterGame = () => {
 				onBuyProducer={handleBuyProducer}
 				onBuyUpgrade={handleBuyUpgrade}
 				onChangeBuyQuantity={changeBuyQuantity}
+				onPickDraft={handlePickDraft}
 				onToggleSmartStocker={toggleSmartStocker}
 			/>
 			<LeaderboardCard
@@ -1936,6 +2212,12 @@ export const MonsterGame = () => {
 				viewerId={session.user.id}
 			/>
 			<AchievementsCard game={game} />
+			<CoolantCard
+				game={game}
+				isSaving={isSaving}
+				onBuyCoolingTower={handleBuyCoolingTower}
+				onVentWall={handleVentWall}
+			/>
 			<CodexCard game={game} />
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>

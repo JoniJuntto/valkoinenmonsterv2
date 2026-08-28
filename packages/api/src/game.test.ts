@@ -5,6 +5,7 @@ import {
 	ASCENSION_NODES,
 	acceptManualClicks,
 	activeFrenzyMultiplier,
+	activeWall,
 	ascensionNodeCost,
 	ascensionNodeUnlocked,
 	ascensionPotential,
@@ -20,6 +21,8 @@ import {
 	collectionMultiplier,
 	collectUnlockedVariants,
 	completedCollectionSets,
+	coolantPerSecond,
+	coolingTowerCost,
 	countUnlockedAchievements,
 	createHeadStartProducers,
 	createInitialAscensionNodes,
@@ -27,13 +30,15 @@ import {
 	createInitialProducers,
 	createStartingRunUpgrades,
 	crossWorldMultiplier,
+	DRAFT_CARDS,
+	DRAFT_SIZE,
 	derivedCanVariantIds,
 	FLAVOR_UPGRADES,
+	FRENZY_DRAFT_BONUS_MS,
 	FRENZY_DURATION_MS,
 	formatGameNumber,
 	frenzyDurationMs,
 	frenzyMultiplier,
-	type GameProgress,
 	GOLDEN_RUSH_DROP_CHANCE,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_RUSH_MIN_DELAY_MS,
@@ -55,17 +60,20 @@ import {
 	producerCost,
 	productionTimeMs,
 	RUN_UPGRADES,
+	rollDraftOptions,
 	rollGoldenRushDelayMs,
 	rollGoldenRushDrop,
 	rollGoldenRushReward,
 	unionCollection,
 	unlockedAchievementIds,
+	WALLS,
 	WORLDS,
 } from "./game";
 
-const createProgress = (): GameProgress => ({
+const createProgress = (): AchievementProgress => ({
 	collection: [],
 	goldenUpgrades: createInitialGoldenUpgrades(),
+	prestigeLevel: 0,
 	producers: createInitialProducers(),
 	runUpgrades: [],
 	totalGoldenCans: 0,
@@ -330,6 +338,49 @@ describe("Monster game economy", () => {
 		expect(offlineProductionMultiplier(progress)).toBeCloseTo(0.8);
 	});
 
+	test("rolls drafts with the tier flavor plus distinct free cards", () => {
+		const seededRandom = (values: number[]): (() => number) => {
+			let index = 0;
+			return () => {
+				const value = values[index % values.length];
+				index += 1;
+				return value === undefined ? 0 : value;
+			};
+		};
+		const options = rollDraftOptions(0, seededRandom([0.99, 0.99]));
+		expect(options).toHaveLength(DRAFT_SIZE);
+		expect(options[0]).toBe(FLAVOR_UPGRADES[0]?.id);
+		expect(new Set(options).size).toBe(DRAFT_SIZE);
+		for (const id of options.slice(1)) {
+			expect(DRAFT_CARDS.some((card) => card.id === id)).toBe(true);
+		}
+		// Same seed, same draft; another seed, different order of niche cards.
+		expect(rollDraftOptions(0, seededRandom([0.99, 0.99]))).toEqual(options);
+		expect(rollDraftOptions(3, seededRandom([0, 0])).slice(1)).not.toEqual(
+			options.slice(1)
+		);
+	});
+
+	test("keeps draft cards free, draft-only, and bound to real producers", () => {
+		for (const card of DRAFT_CARDS) {
+			expect(card.cost).toBe(0);
+			expect(RUN_UPGRADES.some(({ id }) => id === card.id)).toBe(false);
+			if (card.kind === "grant") {
+				expect(PRODUCERS.some(({ id }) => id === card.producerId)).toBe(true);
+				expect(card.grantQuantity ?? 0).toBeGreaterThan(0);
+			}
+		}
+		expect(DRAFT_CARDS.length).toBeGreaterThanOrEqual(DRAFT_SIZE - 1);
+	});
+
+	test("extends frenzy duration with draft cards", () => {
+		const progress = createProgress();
+		progress.runUpgrades.push("draft-frenzy-chug");
+		expect(frenzyDurationMs(progress)).toBe(
+			FRENZY_DURATION_MS + FRENZY_DRAFT_BONUS_MS
+		);
+	});
+
 	test("multiplies production by overcharge ranks", () => {
 		const progress = createProgress();
 		progress.producers["mini-fridge"] = 1;
@@ -526,6 +577,77 @@ describe("worlds", () => {
 		expect(bestStockerPurchase(progress, 4_200_000)).toBeNull();
 		progress.prestigeLevel = 3;
 		expect(bestStockerPurchase(progress, 4_200_000)).toBe("blacklight-still");
+	});
+});
+
+describe("walls and coolant", () => {
+	test("activates walls in order as runCans crosses each checkpoint", () => {
+		const progress = { ...createProgress(), runCans: 0, ventedWalls: [] };
+		expect(activeWall(progress)).toBeNull();
+		const overheated = { ...progress, runCans: 1e12 };
+		expect(activeWall(overheated)?.id).toBe("overheat");
+		const siphoned = {
+			...overheated,
+			runCans: 1e15,
+			ventedWalls: ["overheat"],
+		};
+		expect(activeWall(siphoned)?.id).toBe("siphon");
+		const blackedOut = {
+			...siphoned,
+			runCans: 1e18,
+			ventedWalls: ["overheat", "siphon"],
+		};
+		expect(activeWall(blackedOut)?.id).toBe("blackout");
+		expect(
+			activeWall({
+				...blackedOut,
+				ventedWalls: ["overheat", "siphon", "blackout"],
+			})
+		).toBeNull();
+	});
+
+	test("halves production while overheated and restores it after venting", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		expect(calculateCps(progress)).toBe(1);
+		const overheated = { ...progress, runCans: 1e12, ventedWalls: [] };
+		expect(calculateCps(overheated)).toBe(0.5);
+		expect(calculateCps({ ...overheated, ventedWalls: ["overheat"] })).toBe(1);
+	});
+
+	test("never stacks wall penalties — the first un-vented wall rules", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		const skippedAhead = { ...progress, runCans: 1e18, ventedWalls: [] };
+		expect(calculateCps(skippedAhead)).toBe(0.5);
+		// Siphon is not active while Overheat blocks it, so towers run at full rate.
+		expect(coolantPerSecond({ ...skippedAhead, coolantTowers: 4 })).toBe(2);
+	});
+
+	test("produces coolant per tower and throttles it during the siphon", () => {
+		const progress = { ...createProgress(), runCans: 1e12, ventedWalls: [] };
+		expect(coolantPerSecond({ ...progress, coolantTowers: 0 })).toBe(0);
+		expect(coolantPerSecond({ ...progress, coolantTowers: 3 })).toBe(1.5);
+		const siphoned = {
+			...progress,
+			runCans: 1e15,
+			ventedWalls: ["overheat"],
+		};
+		expect(coolantPerSecond({ ...siphoned, coolantTowers: 3 })).toBeCloseTo(
+			0.375
+		);
+	});
+
+	test("prices cooling towers on the producer curve", () => {
+		expect(coolingTowerCost(0)).toBe(200_000_000_000);
+		expect(coolingTowerCost(1)).toBe(229_999_999_999);
+		expect(
+			WALLS.map(({ id, threshold, ventCost }) => ({ id, threshold, ventCost }))
+		).toEqual([
+			{ id: "overheat", threshold: 1e12, ventCost: 100 },
+			{ id: "siphon", threshold: 1e15, ventCost: 1000 },
+			{ id: "blackout", threshold: 1e18, ventCost: 25_000 },
+		]);
 	});
 });
 

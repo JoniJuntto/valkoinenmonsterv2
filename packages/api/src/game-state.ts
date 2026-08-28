@@ -8,26 +8,34 @@ import {
 	CLICK_RUSH_DURATION_MS,
 	clampGameCounter,
 	clampGameValue,
+	countRunUpgradesOfKind,
 	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	DRAFT_SIZE,
+	FLAVOR_UPGRADES,
 	FRENZY_CHRONOMETER_BONUS_MS,
+	FRENZY_DRAFT_BONUS_MS,
 	FRENZY_DURATION_MS,
 	type GameProgress,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_UPGRADES,
 	type GoldenRushBuffKind,
 	type GoldenUpgradeRanks,
+	getRunUpgrade,
 	isAchievementId,
 	isCanVariantId,
+	isDraftOnlyKind,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
+	isWallId,
 	MAX_FRENZY_STACKS,
 	MAX_GAME_VALUE,
 	MAX_MANUAL_CLICK_BUDGET,
 	MAX_PERSISTED_COUNTER,
 	PRODUCTION_FRENZY_DURATION_MS,
 	type ProducerCounts,
+	WALLS,
 } from "./game";
 
 export type MutableGameState = Omit<
@@ -111,11 +119,44 @@ const normalizeTimer = (
 		: value;
 };
 
-export const normalizePersistedGameState = (
-	state: GameStateRow,
-	serverNow: Date
-): MutableGameState => {
-	const serverNowMs = serverNow.getTime();
+const isDraftOptionId = (id: string): boolean => {
+	const card = getRunUpgrade(id);
+	return card !== undefined && isDraftOnlyKind(card.kind);
+};
+
+const normalizeRunDraft = (
+	value: unknown,
+	draftTier: number
+): string[] | null => {
+	if (!Array.isArray(value) || draftTier >= FLAVOR_UPGRADES.length) {
+		return null;
+	}
+	const options = [
+		...new Set(
+			value.filter(
+				(id): id is string => typeof id === "string" && isDraftOptionId(id)
+			)
+		),
+	];
+	return options.length === DRAFT_SIZE ? options : null;
+};
+
+const normalizeVentedWalls = (value: unknown): string[] => {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const vented = new Set(value.filter(isWallId));
+	const prefix: string[] = [];
+	for (const wall of WALLS) {
+		if (!vented.has(wall.id)) {
+			break;
+		}
+		prefix.push(wall.id);
+	}
+	return prefix;
+};
+
+export const normalizeCanBalances = (state: GameStateRow) => {
 	const cans = clampGameValue(state.cans);
 	const runCans = Math.max(cans, clampGameValue(state.runCans));
 	const bestRunCans = Math.max(runCans, clampGameValue(state.bestRunCans));
@@ -123,6 +164,16 @@ export const normalizePersistedGameState = (
 		bestRunCans,
 		clampGameValue(state.lifetimeCans)
 	);
+	return { bestRunCans, cans, lifetimeCans, runCans };
+};
+
+export const normalizePersistedGameState = (
+	state: GameStateRow,
+	serverNow: Date
+): MutableGameState => {
+	const serverNowMs = serverNow.getTime();
+	const { bestRunCans, cans, lifetimeCans, runCans } =
+		normalizeCanBalances(state);
 	const goldenCans = clampGameCounter(state.goldenCans);
 	const totalGoldenCans = Math.max(
 		goldenCans,
@@ -142,10 +193,20 @@ export const normalizePersistedGameState = (
 	};
 
 	const goldenUpgrades = normalizeGoldenUpgrades(state.goldenUpgrades);
+	const runUpgrades = Array.isArray(state.runUpgrades)
+		? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
+		: [];
+	const draftTier = Math.min(
+		FLAVOR_UPGRADES.length,
+		clampGameCounter(state.draftTier)
+	);
+	const runDraft = normalizeRunDraft(state.runDraft, draftTier);
 	const ascensionNodes = normalizeAscensionNodes(state.ascensionNodes);
 	const frenzyAllowanceMs =
 		FRENZY_DURATION_MS +
-		goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS;
+		goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
+		countRunUpgradesOfKind(runUpgrades, "frenzy-duration") *
+			FRENZY_DRAFT_BONUS_MS;
 	const frenzyEndsAt = normalizeTimer(
 		state.frenzyEndsAt,
 		serverNowMs,
@@ -178,6 +239,9 @@ export const normalizePersistedGameState = (
 		bestRunCans,
 		cans,
 		collection: normalizeCollection(state.collection),
+		coolant: clampGameValue(state.coolant),
+		coolantTowers: clampGameCounter(state.coolantTowers),
+		draftTier,
 		frenzyEndsAt,
 		frenzyStacks: frenzyEndsAt
 			? finiteInteger(state.frenzyStacks, MAX_FRENZY_STACKS)
@@ -209,14 +273,14 @@ export const normalizePersistedGameState = (
 		producers: normalizeProducers(state.producers),
 		revision: clampGameCounter(state.revision),
 		runCans,
-		runUpgrades: Array.isArray(state.runUpgrades)
-			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
-			: [],
+		runDraft,
+		runUpgrades,
 		totalAscensionSparks,
 		totalGoldenCans,
 		unlockedAchievements: Array.isArray(state.unlockedAchievements)
 			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
 			: [],
+		ventedWalls: normalizeVentedWalls(state.ventedWalls),
 	};
 };
 
@@ -224,6 +288,37 @@ const invariant = (condition: boolean, message: string): void => {
 	if (!condition) {
 		throw new Error(`Progression invariant failed: ${message}`);
 	}
+};
+
+const assertDraftInvariants = (state: MutableGameState): void => {
+	invariant(
+		Number.isInteger(state.draftTier) &&
+			state.draftTier >= 0 &&
+			state.draftTier <= FLAVOR_UPGRADES.length,
+		"draft tier must be within the flavor lineup"
+	);
+	invariant(
+		state.runDraft === null ||
+			(state.runDraft.length === DRAFT_SIZE &&
+				new Set(state.runDraft).size === DRAFT_SIZE &&
+				state.runDraft.every(isDraftOptionId)),
+		"run draft must offer valid draft-only upgrades"
+	);
+};
+
+const assertWallStateInvariants = (state: MutableGameState): void => {
+	invariant(
+		Number.isFinite(state.coolant) &&
+			state.coolant >= 0 &&
+			state.coolant <= MAX_GAME_VALUE,
+		"coolant must be finite and non-negative"
+	);
+	invariant(
+		Number.isInteger(state.coolantTowers) &&
+			state.coolantTowers >= 0 &&
+			state.coolantTowers <= MAX_PERSISTED_COUNTER,
+		"cooling tower count must be valid"
+	);
 };
 
 export const assertProgressionInvariants = (
@@ -274,6 +369,7 @@ export const assertProgressionInvariants = (
 			state.runUpgrades.every(isRunUpgradeId),
 		"run upgrades must be known and unique"
 	);
+	assertDraftInvariants(state);
 	invariant(
 		state.unlockedAchievements.length ===
 			new Set(state.unlockedAchievements).size &&
@@ -315,6 +411,13 @@ export const assertProgressionInvariants = (
 			state.manualClickBudget <= MAX_MANUAL_CLICK_BUDGET,
 		"manual click budget must be bounded"
 	);
+	assertWallStateInvariants(state);
+	const wallIdOrder = WALLS.map(({ id }) => id);
+	invariant(
+		state.ventedWalls.length <= wallIdOrder.length &&
+			state.ventedWalls.every((id, index) => id === wallIdOrder[index]),
+		"vented walls must be a prefix of the wall catalog"
+	);
 	invariant(
 		Number.isInteger(state.nextFrenzyClick) && state.nextFrenzyClick >= 1,
 		"next frenzy click must be a positive integer"
@@ -340,8 +443,9 @@ export const assertProgressionInvariants = (
 	const maximumFrenzyEnd =
 		serverNowMs +
 		(FRENZY_DURATION_MS +
-			state.goldenUpgrades["frenzy-chronometer"] *
-				FRENZY_CHRONOMETER_BONUS_MS) *
+			state.goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
+			countRunUpgradesOfKind(state.runUpgrades, "frenzy-duration") *
+				FRENZY_DRAFT_BONUS_MS) *
 			(state.ascensionNodes["frenzy-stacking"] > 0 ? MAX_FRENZY_STACKS : 1);
 	invariant(
 		state.frenzyEndsAt === null ||

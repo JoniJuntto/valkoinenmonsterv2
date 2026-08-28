@@ -17,9 +17,9 @@ const { connectTestDatabase, deleteTestUsers, seedTestUser } = await import(
 	"@valkoinenmonsterv2/db/test-database"
 );
 const {
-	buyUpgrade,
 	createDefaultGameState,
 	mutateGameStateWithState,
+	pickDraft,
 	prestige,
 } = await import("./game");
 
@@ -233,7 +233,7 @@ describe("PostgreSQL game mutation contract", () => {
 		}
 	});
 
-	test("persists codex unlocks through purchases and prestige", async () => {
+	test("persists codex unlocks through draft picks and prestige", async () => {
 		const userId = await seedTestUser(database);
 		try {
 			const now = new Date();
@@ -244,12 +244,21 @@ describe("PostgreSQL game mutation contract", () => {
 			seeded.lifetimeCans = 4_000_000;
 			await database.insert(gameState).values(seeded);
 
+			// Flavors are draft-only now: reaching the tier cost rolls a draft and
+			// picking the flavor card must unlock the codex variant.
+			const rolled = await mutateGameStateWithState(
+				database,
+				userId,
+				false,
+				mutationInput(0)
+			);
+			expect(rolled.snapshot.runDraft?.[0]).toBe("ultra-white");
 			await mutateGameStateWithState(
 				database,
 				userId,
 				false,
-				mutationInput(0),
-				buyUpgrade("ultra-white")
+				mutationInput(rolled.snapshot.revision),
+				pickDraft(0)
 			);
 			const save = await readSave(userId);
 			expect(save?.collection).toContain("ultra-white");

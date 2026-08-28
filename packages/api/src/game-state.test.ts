@@ -6,6 +6,7 @@ import {
 	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	FLAVOR_UPGRADES,
 	FRENZY_DURATION_MS,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	MAX_MANUAL_CLICK_BUDGET,
@@ -21,7 +22,10 @@ const createRow = (): GameStateRow => ({
 	bestRunCans: 0,
 	cans: 0,
 	collection: [],
+	coolant: 0,
+	coolantTowers: 0,
 	createdAt: new Date(0),
+	draftTier: 0,
 	frenzyEndsAt: null,
 	frenzyStacks: 0,
 	goldenCans: 0,
@@ -38,6 +42,7 @@ const createRow = (): GameStateRow => ({
 	producers: createInitialProducers(),
 	revision: 0,
 	runCans: 0,
+	runDraft: null,
 	runUpgrades: [],
 	shadowBanned: false,
 	totalAscensionSparks: 0,
@@ -45,6 +50,7 @@ const createRow = (): GameStateRow => ({
 	unlockedAchievements: [],
 	updatedAt: new Date(0),
 	userId: "user",
+	ventedWalls: [],
 });
 
 describe("persisted game state", () => {
@@ -93,6 +99,29 @@ describe("persisted game state", () => {
 		).not.toThrow();
 	});
 
+	test("repairs coolant balances and vented wall prefixes", () => {
+		const row = createRow();
+		row.coolant = Number.NaN;
+		row.coolantTowers = 2.9;
+		row.ventedWalls = ["blackout", "overheat", "unknown"];
+
+		const normalized = normalizePersistedGameState(row, new Date(0));
+
+		expect(normalized.coolant).toBe(0);
+		expect(normalized.coolantTowers).toBe(2);
+		// "blackout" is dropped, leaving the longest valid vented prefix.
+		expect(normalized.ventedWalls).toEqual(["overheat"]);
+		expect(() =>
+			assertProgressionInvariants(normalized, new Date(0))
+		).not.toThrow();
+
+		row.coolant = 42;
+		row.ventedWalls = ["overheat"];
+		const clean = normalizePersistedGameState(row, new Date(0));
+		expect(clean.coolant).toBe(42);
+		expect(clean.ventedWalls).toEqual(["overheat"]);
+	});
+
 	test("repairs future and malformed timers to canonical horizons", () => {
 		const row = createRow();
 		const now = new Date(10_000);
@@ -120,6 +149,32 @@ describe("persisted game state", () => {
 		const malformed = normalizePersistedGameState(row, now);
 		expect(malformed.goldenRushBuffKind).toBeNull();
 		expect(malformed.goldenRushBuffEndsAt).toBeNull();
+	});
+
+	test("repairs malformed drafts and keeps valid ones", () => {
+		const row = createRow();
+		row.draftTier = 2;
+		row.runDraft = ["ultra-rosa", "garbage", "draft-frenzy-chug"];
+		const repaired = normalizePersistedGameState(row, new Date(0));
+		expect(repaired.draftTier).toBe(2);
+		expect(repaired.runDraft).toBeNull();
+
+		row.runDraft = ["ultra-rosa", "draft-spare-pull-tabs", "draft-frenzy-chug"];
+		const valid = normalizePersistedGameState(row, new Date(0));
+		expect(valid.runDraft).toEqual([
+			"ultra-rosa",
+			"draft-spare-pull-tabs",
+			"draft-frenzy-chug",
+		]);
+
+		row.draftTier = 10_000;
+		row.runDraft = ["ultra-rosa", "garbage", "draft-frenzy-chug"];
+		const exhausted = normalizePersistedGameState(row, new Date(0));
+		expect(exhausted.draftTier).toBe(FLAVOR_UPGRADES.length);
+		expect(exhausted.runDraft).toBeNull();
+		expect(() =>
+			assertProgressionInvariants(exhausted, new Date(0))
+		).not.toThrow();
 	});
 
 	test("rejects transition states that break progression ordering", () => {

@@ -21,6 +21,10 @@ export const FRENZY_STACK_BONUS = 2;
 export const MAX_FRENZY_STACKS = 2;
 export const GOLDEN_RUSH_DROP_CHANCE = 0.25;
 
+export const COOLING_TOWER_BASE_COST = 200_000_000_000;
+export const COOLING_TOWER_COST_GROWTH = 1.15;
+export const COOLANT_PER_TOWER_PER_SEC = 0.5;
+
 export const GOLDEN_RUSH_MIN_DELAY_MS = 180_000;
 export const GOLDEN_RUSH_MAX_DELAY_MS = 420_000;
 export const GOLDEN_RUSH_VISIBLE_MS = 12_000;
@@ -303,6 +307,48 @@ export const worldOfProducer = (
 		world.producers.some((producer) => producer.id === producerId)
 	);
 
+export interface WallDefinition {
+	coolantMultiplier: number;
+	description: string;
+	id: string;
+	name: string;
+	productionMultiplier: number;
+	threshold: number;
+	ventCost: number;
+}
+
+export const WALLS = [
+	{
+		coolantMultiplier: 1,
+		description: "Production halved — vent the overheat with coolant",
+		id: "overheat",
+		name: "Overheat",
+		productionMultiplier: 0.5,
+		threshold: 1e12,
+		ventCost: 100,
+	},
+	{
+		coolantMultiplier: 0.25,
+		description: "Cooling towers at quarter output — vent the siphon",
+		id: "siphon",
+		name: "Coolant Siphon",
+		productionMultiplier: 1,
+		threshold: 1e15,
+		ventCost: 1000,
+	},
+	{
+		coolantMultiplier: 1,
+		description: "Production halved — vent the blackout",
+		id: "blackout",
+		name: "Blackout",
+		productionMultiplier: 0.5,
+		threshold: 1e18,
+		ventCost: 25_000,
+	},
+] as const satisfies readonly WallDefinition[];
+
+export type WallId = (typeof WALLS)[number]["id"];
+
 export const SYNERGY_BONUS_PER_OWNED = 0.01;
 
 // Every producer boosts exactly one different producer by
@@ -360,11 +406,18 @@ export const PRODUCER_SYNERGY_SOURCES: Record<ProducerId, ProducerId> =
 export const ORIGINAL_PRODUCER_LINEUP_SIZE = 10;
 export const HEAD_START_COUNTS = [0, 10, 25, 50, 100] as const;
 
-export type RunUpgradeKind = "click" | "cps-click" | "flavor" | "milestone";
+export type RunUpgradeKind =
+	| "click"
+	| "cps-click"
+	| "flavor"
+	| "milestone"
+	| "grant"
+	| "frenzy-duration";
 
 export interface RunUpgradeDefinition {
 	cost: number;
 	description: string;
+	grantQuantity?: number;
 	id: string;
 	kind: RunUpgradeKind;
 	name: string;
@@ -492,6 +545,63 @@ export const RUN_UPGRADES: RunUpgradeDefinition[] = [
 	...FLAVOR_UPGRADES,
 	...milestoneUpgrades,
 ];
+
+export const DRAFT_SIZE = 3;
+export const FRENZY_DRAFT_BONUS_MS = 10_000;
+
+// Cards only offered in flavor-tier drafts; never sold in the shop.
+export const DRAFT_CARDS: RunUpgradeDefinition[] = [
+	{
+		cost: 0,
+		description: "Gain 5 Pull Tab producers",
+		grantQuantity: 5,
+		id: "draft-spare-pull-tabs",
+		kind: "grant",
+		name: "Spare Pull Tabs",
+		producerId: "pull-tab",
+	},
+	{
+		cost: 0,
+		description: "Gain 3 Mini Fridge producers",
+		grantQuantity: 3,
+		id: "draft-fridge-restock",
+		kind: "grant",
+		name: "Fridge Restock",
+		producerId: "mini-fridge",
+	},
+	{
+		cost: 0,
+		description: "+10 seconds to every frenzy this run",
+		id: "draft-frenzy-chug",
+		kind: "frenzy-duration",
+		name: "Frenzy Chug",
+	},
+];
+
+export const isDraftOnlyKind = (kind: RunUpgradeKind): boolean =>
+	kind === "flavor" || kind === "grant" || kind === "frenzy-duration";
+
+// The draft always offers the tier's flavor (strong, costs the tier price)
+// plus two random distinct free cards from the niche pool.
+export const rollDraftOptions = (
+	tier: number,
+	random: () => number
+): string[] => {
+	const flavor = FLAVOR_UPGRADES[Math.max(0, tier)];
+	if (!flavor) {
+		return [];
+	}
+	const niche = [...DRAFT_CARDS];
+	const picked: string[] = [];
+	for (let count = 0; count < DRAFT_SIZE - 1 && niche.length > 0; count += 1) {
+		const index = Math.floor(random() * niche.length);
+		const [card] = niche.splice(index, 1);
+		if (card) {
+			picked.push(card.id);
+		}
+	}
+	return [flavor.id, ...picked];
+};
 
 export const GOLDEN_UPGRADES = [
 	{
@@ -675,10 +785,13 @@ export interface GameProgress {
 
 export interface AchievementProgress extends GameProgress {
 	bestRunCans?: number;
+	coolantTowers?: number;
 	goldenCans?: number;
 	lifetimeCans?: number;
 	prestigeLevel?: number;
+	runCans?: number;
 	unlockedAchievements?: string[];
+	ventedWalls?: string[];
 }
 
 export type CollectionSetId =
@@ -881,6 +994,9 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	ascensionSparks: number;
 	bestRunCans: number;
 	cans: number;
+	coolant: number;
+	coolantTowers: number;
+	draftTier: number;
 	frenzyEndsAt: number | null;
 	frenzyStacks: number;
 	goldenCans: number;
@@ -898,15 +1014,17 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	prestigeLevel: number;
 	revision: number;
 	runCans: number;
+	runDraft: string[] | null;
 	serverNow: number;
 	totalAscensionSparks: number;
 	unlockedAchievements: string[];
+	ventedWalls: string[];
 }
 
 const producerIds = new Set<string>(ALL_PRODUCERS.map(({ id }) => id));
 const producerById = new Map(ALL_PRODUCERS.map((p) => [p.id, p]));
 const runUpgradeById = new Map(
-	RUN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
+	[...RUN_UPGRADES, ...DRAFT_CARDS].map((upgrade) => [upgrade.id, upgrade])
 );
 const goldenUpgradeById = new Map(
 	GOLDEN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
@@ -1153,12 +1271,12 @@ export const activeFrenzyMultiplier = (
 const hasRunUpgrade = (progress: GameProgress, id: string): boolean =>
 	progress.runUpgrades.includes(id);
 
-const countRunUpgradesOfKind = (
-	progress: GameProgress,
+export const countRunUpgradesOfKind = (
+	runUpgrades: string[],
 	kind: RunUpgradeKind
 ): number => {
 	let count = 0;
-	for (const id of progress.runUpgrades) {
+	for (const id of runUpgrades) {
 		if (runUpgradeById.get(id)?.kind === kind) {
 			count += 1;
 		}
@@ -1185,6 +1303,59 @@ const reactorMultiplier = (progress: GameProgress): number =>
 const overchargeMultiplier = (progress: GameProgress): number =>
 	OVERCHARGE_MULTIPLIER **
 	Math.max(0, progress.goldenUpgrades["overcharge-core"]);
+
+const wallIds = new Set<string>(WALLS.map(({ id }) => id));
+
+export const isWallId = (value: string): value is WallId => wallIds.has(value);
+
+export const activeWall = (
+	progress: Pick<AchievementProgress, "runCans" | "ventedWalls">
+): WallDefinition | null => {
+	const runCans = Math.max(0, progress.runCans ?? 0);
+	const vented = progress.ventedWalls ?? [];
+	for (const wall of WALLS) {
+		if (runCans < wall.threshold) {
+			return null;
+		}
+		if (!vented.includes(wall.id)) {
+			return wall;
+		}
+	}
+	return null;
+};
+
+export const wallProductionMultiplier = (
+	progress: Pick<AchievementProgress, "runCans" | "ventedWalls">
+): number => {
+	const wall = activeWall(progress);
+	return wall ? wall.productionMultiplier : 1;
+};
+
+export const wallCoolantMultiplier = (
+	progress: Pick<AchievementProgress, "runCans" | "ventedWalls">
+): number => {
+	const wall = activeWall(progress);
+	return wall ? wall.coolantMultiplier : 1;
+};
+
+export const coolingTowerCost = (towers: number): number =>
+	clampGameValue(
+		Math.floor(
+			COOLING_TOWER_BASE_COST * COOLING_TOWER_COST_GROWTH ** Math.max(0, towers)
+		)
+	);
+
+export const coolantPerSecond = (
+	progress: Pick<
+		AchievementProgress,
+		"coolantTowers" | "runCans" | "ventedWalls"
+	>
+): number =>
+	clampGameValue(
+		Math.max(0, progress.coolantTowers ?? 0) *
+			COOLANT_PER_TOWER_PER_SEC *
+			wallCoolantMultiplier(progress)
+	);
 
 export interface AchievementDefinition {
 	description: string;
@@ -1460,21 +1631,24 @@ export const calculateProductionCps = (
 		}
 		producerCps += worldCps * crossWorldMultiplier(world.id, ownedWorldIds);
 	}
-	producerCps *= 2 ** countRunUpgradesOfKind(progress, "flavor");
+	producerCps *= 2 ** countRunUpgradesOfKind(progress.runUpgrades, "flavor");
 	producerCps *= 1 + progress.goldenUpgrades["endless-chill"] * 0.15;
 	producerCps *=
 		1 + Math.max(0, progress.totalGoldenCans) * GOLDEN_CAN_PRODUCTION_BONUS;
 	producerCps *= achievementMultiplier(progress);
 	producerCps *= overchargeMultiplier(progress);
 	producerCps *= collectionMultiplier(progress.collection);
+	producerCps *= wallProductionMultiplier(progress);
 	return clampGameValue(producerCps * reactorMultiplier(progress));
 };
 
 export const calculateClickValue = (progress: AchievementProgress): number => {
 	const clickBase =
-		CLICK_UPGRADE_MULTIPLIER ** countRunUpgradesOfKind(progress, "click");
+		CLICK_UPGRADE_MULTIPLIER **
+		countRunUpgradesOfKind(progress.runUpgrades, "click");
 	const cpsPercent =
-		countRunUpgradesOfKind(progress, "cps-click") * CPS_CLICK_PERCENT;
+		countRunUpgradesOfKind(progress.runUpgrades, "cps-click") *
+		CPS_CLICK_PERCENT;
 	const gripMultiplier = 1 + progress.goldenUpgrades["golden-grip"] * 0.25;
 	return clampGameValue(
 		(clickBase + calculateProductionCps(progress) * cpsPercent) * gripMultiplier
@@ -1494,7 +1668,9 @@ export const frenzyMultiplier = (progress: GameProgress): number =>
 export const frenzyDurationMs = (progress: GameProgress): number =>
 	FRENZY_DURATION_MS +
 	Math.max(0, progress.goldenUpgrades["frenzy-chronometer"]) *
-		FRENZY_CHRONOMETER_BONUS_MS;
+		FRENZY_CHRONOMETER_BONUS_MS +
+	countRunUpgradesOfKind(progress.runUpgrades, "frenzy-duration") *
+		FRENZY_DRAFT_BONUS_MS;
 
 export const offlineProductionMultiplier = (progress: GameProgress): number =>
 	OFFLINE_PRODUCTION_MULTIPLIER *

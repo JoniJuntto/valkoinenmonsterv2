@@ -22,6 +22,10 @@ const createSnapshot = (
 	ascensionSparks: 0,
 	bestRunCans: 0,
 	cans: 0,
+	collection: [],
+	coolant: 0,
+	coolantTowers: 0,
+	draftTier: 0,
 	frenzyEndsAt: null,
 	frenzyStacks: 0,
 	goldenCans: 0,
@@ -39,11 +43,13 @@ const createSnapshot = (
 	producers: createInitialProducers(),
 	revision: 1,
 	runCans: 0,
+	runDraft: null,
 	runUpgrades: [],
 	serverNow: 1000,
 	totalAscensionSparks: 0,
 	totalGoldenCans: 0,
 	unlockedAchievements: [],
+	ventedWalls: [],
 	...overrides,
 });
 
@@ -82,6 +88,12 @@ describe("browser game reconciliation", () => {
 		expect(reconciliation.projected.cans).toBe(107);
 		expect(reconciliation.projected.nextFrenzyClick).toBe(93);
 		expect(reconciliation.projected.revision).toBe(3);
+	});
+
+	test("projects coolant from towers between syncs", () => {
+		const snapshot = createSnapshot({ coolant: 10, coolantTowers: 2 });
+		const projected = projectElapsed(snapshot, 6000);
+		expect(projected.coolant).toBeCloseTo(15);
 	});
 
 	test("projects elapsed frenzy and production buff gain across all counters", () => {
