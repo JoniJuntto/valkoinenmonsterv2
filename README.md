@@ -39,6 +39,23 @@ This project uses PostgreSQL with Drizzle ORM.
 bun run db:push
 ```
 
+### PostgreSQL integration tests
+
+The repository includes a disposable PostgreSQL container for integration
+tests. Create the ignored local environment file once:
+
+```bash
+printf '%s\n' 'TEST_DATABASE_URL=postgresql://test:test@127.0.0.1:55432/valkoinenmonster_test' > .env.test.local
+bun run db:test:up
+bun run db:test:migrate
+bun run test:integration
+```
+
+`db:test:migrate` requires `TEST_DATABASE_URL` and explicitly maps it to
+`DATABASE_URL`, so migration cannot fall back to the development database.
+Run `bun run db:test:down` to remove the container and its data. Run the
+database-free suite separately with `bun run test:unit`.
+
 Then, run the development server:
 
 ```bash
@@ -145,6 +162,11 @@ valkoinenmonsterv2/
 - `bun run dev:web`: Start only the web application
 - `bun run dev:server`: Start only the server
 - `bun run check-types`: Check TypeScript types across all apps
+- `bun run test:unit`: Run tests that do not require PostgreSQL
+- `bun run test:integration`: Run PostgreSQL integration tests using `TEST_DATABASE_URL`
+- `bun run db:test:up`: Start the disposable PostgreSQL test database
+- `bun run db:test:migrate`: Migrate only the configured test database
+- `bun run db:test:down`: Remove the PostgreSQL test database and its data
 - `bun run db:push`: Push schema changes to database
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations

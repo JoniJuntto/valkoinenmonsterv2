@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db } from "@valkoinenmonsterv2/db";
+import { type Database, db } from "@valkoinenmonsterv2/db";
 import {
 	bucketCans,
 	trackServerEvent,
@@ -150,9 +150,12 @@ export const createDefaultGameState = (
 	};
 };
 
-const ensureGameState = async (userId: string): Promise<GameStateRow> => {
+const ensureGameState = async (
+	database: Database,
+	userId: string
+): Promise<GameStateRow> => {
 	const now = new Date();
-	const [inserted] = await db
+	const [inserted] = await database
 		.insert(gameState)
 		.values(createDefaultGameState(userId, now))
 		.onConflictDoNothing()
@@ -160,7 +163,7 @@ const ensureGameState = async (userId: string): Promise<GameStateRow> => {
 	if (inserted) {
 		return inserted;
 	}
-	const [existing] = await db
+	const [existing] = await database
 		.select()
 		.from(gameState)
 		.where(eq(gameState.userId, userId))
@@ -304,7 +307,8 @@ interface GameMutationResult {
 	state: MutableGameState;
 }
 
-const mutateGameStateWithState = async (
+export const mutateGameStateWithState = async (
+	database: Database,
 	userId: string,
 	isAnonymous: boolean,
 	input: MutationInput,
@@ -314,7 +318,7 @@ const mutateGameStateWithState = async (
 	const serverNow = Date.now();
 	const now = new Date(serverNow);
 	const current = normalizePersistedGameState(
-		await ensureGameState(userId),
+		await ensureGameState(database, userId),
 		now
 	);
 	const disposition = getMutationDisposition(current, input);
@@ -334,7 +338,7 @@ const mutateGameStateWithState = async (
 	);
 	const mutated = mutation(accrual.state, now);
 	assertProgressionInvariants(mutated, now);
-	const [saved] = await db
+	const [saved] = await database
 		.update(gameState)
 		.set({
 			...mutated,
@@ -387,6 +391,7 @@ const mutateGameState = async (
 ): Promise<GameSnapshot> =>
 	(
 		await mutateGameStateWithState(
+			db,
 			userId,
 			isAnonymous,
 			input,
@@ -416,7 +421,7 @@ const getGameState = async (
 	isAnonymous: boolean
 ): Promise<GameSnapshot> => {
 	const current = normalizePersistedGameState(
-		await ensureGameState(userId),
+		await ensureGameState(db, userId),
 		new Date()
 	);
 	return mutateGameState(
@@ -705,7 +710,7 @@ export const gameRouter = router({
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
 			const before = normalizePersistedGameState(
-				await ensureGameState(ctx.session.user.id),
+				await ensureGameState(db, ctx.session.user.id),
 				new Date()
 			);
 			const requirement = nextGoldenCanRequirement(before.totalGoldenCans);
@@ -1023,10 +1028,11 @@ export const runAgentGameCommand = async (
 	command: AgentGameCommand
 ) => {
 	const current = normalizePersistedGameState(
-		await ensureGameState(userId),
+		await ensureGameState(db, userId),
 		new Date()
 	);
 	const mutationResult = await mutateGameStateWithState(
+		db,
 		userId,
 		isAnonymous,
 		{
