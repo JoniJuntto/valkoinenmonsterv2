@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import { Input } from "@valkoinenmonsterv2/ui/components/input";
 import { Label } from "@valkoinenmonsterv2/ui/components/label";
@@ -17,9 +17,6 @@ export default function SignInForm({
 }: {
 	onSwitchToSignUp: () => void;
 }) {
-	const navigate = useNavigate({
-		from: "/",
-	});
 	const { isPending } = authClient.useSession();
 
 	const form = useForm({
@@ -43,11 +40,8 @@ export default function SignInForm({
 					},
 					onSuccess: () => {
 						track(AnalyticsEvents.auth.signInSucceeded);
-						navigate({
-							to: "/",
-						});
 						toast.success("Sign in successful");
-						window.location.reload();
+						window.location.assign("/");
 					},
 				}
 			);
