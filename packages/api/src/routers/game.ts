@@ -12,6 +12,7 @@ import {
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
+	ALL_PRODUCERS,
 	ASCENSION_NODES,
 	ASCENSION_WIND_SECONDS,
 	type AscensionNodeId,
@@ -55,12 +56,12 @@ import {
 	isDraftOnlyKind,
 	isGoldenUpgradeId,
 	isProducerId,
+	isWorldUnlocked,
 	MAX_FRENZY_STACKS,
 	nextGoldenCanRequirement,
 	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
 	PRODUCER_SYNERGIES,
-	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	prestigeReward,
 	producerBulkCost,
@@ -74,6 +75,7 @@ import {
 	rollGoldenRushReward,
 	unionCollection,
 	unlockedAchievementIds,
+	worldOfProducer,
 } from "../game";
 import {
 	assertProgressionInvariants,
@@ -571,6 +573,10 @@ export const buyProducer = (producerId: string, quantity = 1): GameMutation => {
 		throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown producer" });
 	}
 	return (state) => {
+		const world = worldOfProducer(producerId);
+		if (!(world && isWorldUnlocked(world, state.prestigeLevel))) {
+			throw new TRPCError({ code: "BAD_REQUEST", message: "World is locked" });
+		}
 		const cost = producerBulkCost(
 			producerId,
 			state.producers[producerId],
@@ -1206,17 +1212,22 @@ export const createAgentGameObservation = (
 	const manualClicksAvailable = Math.floor(state.manualClickBudget);
 	const requirement = nextGoldenCanRequirement(state.totalGoldenCans);
 	const reward = prestigeReward(state.lifetimeCans, state.totalGoldenCans);
-	const producers = PRODUCERS.map((producer) => {
+	const producers = ALL_PRODUCERS.map((producer) => {
+		const world = worldOfProducer(producer.id);
+		const unlocked = world
+			? isWorldUnlocked(world, state.prestigeLevel)
+			: false;
 		const owned = state.producers[producer.id];
 		const cost = producerCost(producer.id, owned);
 		return {
-			affordable: state.cans >= cost,
+			affordable: unlocked && state.cans >= cost,
 			baseCps: producer.baseCps,
 			boosts: PRODUCER_SYNERGIES[producer.id],
 			cost,
 			id: producer.id,
 			name: producer.name,
 			owned,
+			world: world?.name ?? null,
 		};
 	});
 	const runUpgrades = RUN_UPGRADES.filter(

@@ -1,6 +1,7 @@
 import type { GameStateRow } from "@valkoinenmonsterv2/db/schema/game";
 
 import {
+	ALL_PRODUCERS,
 	ASCENSION_NODES,
 	type AscensionNodeId,
 	type AscensionNodeRanks,
@@ -32,7 +33,6 @@ import {
 	MAX_GAME_VALUE,
 	MAX_MANUAL_CLICK_BUDGET,
 	MAX_PERSISTED_COUNTER,
-	PRODUCERS,
 	PRODUCTION_FRENZY_DURATION_MS,
 	type ProducerCounts,
 	WALLS,
@@ -65,7 +65,7 @@ const normalizeProducers = (value: unknown): ProducerCounts => {
 		return producers;
 	}
 	const stored = value as Record<string, unknown>;
-	for (const producer of PRODUCERS) {
+	for (const producer of ALL_PRODUCERS) {
 		const owned = stored[producer.id];
 		producers[producer.id] = finiteInteger(
 			typeof owned === "number" ? owned : 0
@@ -357,8 +357,8 @@ export const assertProgressionInvariants = (
 		);
 	}
 	invariant(
-		Object.keys(state.producers).length === PRODUCERS.length &&
-			PRODUCERS.every(({ id }) => {
+		Object.keys(state.producers).length === ALL_PRODUCERS.length &&
+			ALL_PRODUCERS.every(({ id }) => {
 				const owned = state.producers[id];
 				return Number.isInteger(owned) && owned >= 0 && owned <= MAX_GAME_VALUE;
 			}),

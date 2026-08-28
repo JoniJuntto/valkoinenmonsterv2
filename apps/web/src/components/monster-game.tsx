@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
+	ALL_PRODUCERS,
 	ASCENSION_NODES,
 	type AscensionNodeId,
 	activeFrenzyMultiplier,
@@ -35,12 +36,12 @@ import {
 	goldenUpgradeUnlockLevel,
 	isDraftOnlyKind,
 	isGoldenUpgradeId,
+	isWorldUnlocked,
 	MAX_FRENZY_STACKS,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
 	PRODUCER_SYNERGIES,
 	PRODUCER_SYNERGY_SOURCES,
-	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerId,
 	prestigeReward,
@@ -50,6 +51,8 @@ import {
 	type RunUpgradeKind,
 	SYNERGY_BONUS_PER_OWNED,
 	WALLS,
+	WORLDS,
+	type WorldDefinition,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -314,18 +317,21 @@ const runUpgradesByCost = [...RUN_UPGRADES].sort(
 );
 
 const PRODUCER_NAME_BY_ID = new Map(
-	PRODUCERS.map(({ id, name }) => [id, name])
+	ALL_PRODUCERS.map(({ id, name }) => [id, name])
 );
 const SYNERGY_PERCENT = SYNERGY_BONUS_PER_OWNED * 100;
 
-const selectVisibleProducers = (game: GameSnapshot) => {
+const selectVisibleProducers = (game: GameSnapshot, world: WorldDefinition) => {
 	let highestOwnedIndex = -1;
-	for (const [index, producer] of PRODUCERS.entries()) {
+	for (const [index, producer] of world.producers.entries()) {
 		if (game.producers[producer.id] > 0) {
 			highestOwnedIndex = index;
 		}
 	}
-	return PRODUCERS.slice(0, highestOwnedIndex + 1 + PRODUCERS_REVEALED_AHEAD);
+	return world.producers.slice(
+		0,
+		highestOwnedIndex + 1 + PRODUCERS_REVEALED_AHEAD
+	);
 };
 
 const selectVisibleRunUpgrades = (
@@ -783,44 +789,63 @@ const ShopCard = ({
 							))}
 						</div>
 					</div>
-					<ul className="flex flex-col gap-2">
-						{selectVisibleProducers(game).map((producer) => {
-							const owned = game.producers[producer.id];
-							const cost = producerBulkCost(producer.id, owned, buyQuantity);
-							const boostsName = PRODUCER_NAME_BY_ID.get(
-								PRODUCER_SYNERGIES[producer.id]
-							);
-							const boostedByName = PRODUCER_NAME_BY_ID.get(
-								PRODUCER_SYNERGY_SOURCES[producer.id]
-							);
-							return (
-								<li
-									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
-									key={producer.id}
-								>
-									<div>
-										<h3 className="font-medium">{producer.name}</h3>
-										<p className="text-muted-foreground">
-											{owned} owned · {formatGameNumber(producer.baseCps)} base
-											CPS
-										</p>
-										<p className="text-muted-foreground text-xs">
-											{`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
-										</p>
-									</div>
-									<Button
-										data-producer-id={producer.id}
-										disabled={isSaving || game.cans < cost}
-										onClick={handleProducerClick}
-										size="sm"
-										variant={game.cans < cost ? "outline" : "default"}
-									>
-										{formatGameNumber(cost)}
-									</Button>
-								</li>
-							);
-						})}
-					</ul>
+					{WORLDS.map((world) => {
+						const isWorldOpen = isWorldUnlocked(world, game.prestigeLevel);
+						return (
+							<div className="flex flex-col gap-2" key={world.id}>
+								<h3 className="font-display text-muted-foreground text-sm uppercase tracking-wide">
+									{world.name}
+									{isWorldOpen
+										? null
+										: ` — unlocks at prestige ${world.unlockPrestige}`}
+								</h3>
+								{isWorldOpen ? (
+									<ul className="flex flex-col gap-2">
+										{selectVisibleProducers(game, world).map((producer) => {
+											const owned = game.producers[producer.id];
+											const cost = producerBulkCost(
+												producer.id,
+												owned,
+												buyQuantity
+											);
+											const boostsName = PRODUCER_NAME_BY_ID.get(
+												PRODUCER_SYNERGIES[producer.id]
+											);
+											const boostedByName = PRODUCER_NAME_BY_ID.get(
+												PRODUCER_SYNERGY_SOURCES[producer.id]
+											);
+											return (
+												<li
+													className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+													key={producer.id}
+												>
+													<div>
+														<h4 className="font-medium">{producer.name}</h4>
+														<p className="text-muted-foreground">
+															{owned} owned ·{" "}
+															{formatGameNumber(producer.baseCps)} base CPS
+														</p>
+														<p className="text-muted-foreground text-xs">
+															{`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
+														</p>
+													</div>
+													<Button
+														data-producer-id={producer.id}
+														disabled={isSaving || game.cans < cost}
+														onClick={handleProducerClick}
+														size="sm"
+														variant={game.cans < cost ? "outline" : "default"}
+													>
+														{formatGameNumber(cost)}
+													</Button>
+												</li>
+											);
+										})}
+									</ul>
+								) : null}
+							</div>
+						);
+					})}
 				</section>
 
 				<section className="flex flex-col gap-2">
@@ -840,7 +865,8 @@ const ShopCard = ({
 								? game.producers[upgrade.producerId]
 								: 0;
 							const producerName = upgrade.producerId
-								? PRODUCERS.find(({ id }) => id === upgrade.producerId)?.name
+								? ALL_PRODUCERS.find(({ id }) => id === upgrade.producerId)
+										?.name
 								: undefined;
 							const isUnlocked =
 								upgrade.requiredOwned === undefined ||

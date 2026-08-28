@@ -29,6 +29,7 @@ import {
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	createStartingRunUpgrades,
+	crossWorldMultiplier,
 	DRAFT_CARDS,
 	DRAFT_SIZE,
 	derivedCanVariantIds,
@@ -46,6 +47,7 @@ import {
 	goldenUpgradeCost,
 	goldenUpgradeUnlockLevel,
 	isProducerId,
+	isWorldUnlocked,
 	luckyCanGain,
 	MAX_GAME_VALUE,
 	MAX_PERSISTED_COUNTER,
@@ -65,6 +67,7 @@ import {
 	unionCollection,
 	unlockedAchievementIds,
 	WALLS,
+	WORLDS,
 } from "./game";
 
 const createProgress = (): AchievementProgress => ({
@@ -508,6 +511,72 @@ describe("validated accrual", () => {
 		expect(calculateIdleGain(progress, 10_000, 2000, 1)).toBe(28);
 		expect(calculateIdleGain(progress, 10_000, 2000, 2)).toBe(56);
 		expect(calculateIdleGain(progress, 10_000, 2000, 0.1)).toBeCloseTo(2.8);
+	});
+});
+
+describe("worlds", () => {
+	test("locks world producers until the prestige requirement", () => {
+		const progress = createProgress();
+		progress.producers["blacklight-still"] = 1;
+		expect(calculateCps(progress)).toBe(0);
+		const unlocked: AchievementProgress = { ...progress, prestigeLevel: 3 };
+		// prestige 3 unlocks the Born Again and Serial Resetter achievements (+2%)
+		expect(calculateCps(unlocked)).toBe(7000 * 1.02);
+	});
+
+	test("each owned world boosts every other world's production", () => {
+		const progress: AchievementProgress = {
+			...createProgress(),
+			prestigeLevel: 9,
+		};
+		progress.producers["pull-tab"] = 1;
+		progress.producers["blacklight-still"] = 1;
+		progress.producers["frost-coil"] = 1;
+		progress.producers["pallet-rack"] = 1;
+		// prestige 9 unlocks four prestige-tier achievements (+4%); frost-coil
+		// and pallet-rack also get +1% from the owned producers that boost them
+		expect(calculateCps(progress)).toBeCloseTo(
+			(0.1 + 7000 + 1_500_000 * 1.01 + 400_000_000 * 1.01) * 1.3 * 1.04
+		);
+	});
+
+	test("prices world producers with the shared cost formula", () => {
+		expect(producerCost("blacklight-still", 0)).toBe(4_200_000);
+		expect(producerCost("blacklight-still", 1)).toBe(
+			Math.floor(4_200_000 * 1.15)
+		);
+		expect(producerCost("the-manifest", 0)).toBe(240_000_000_000_000_000);
+		const [home, ultraViolet, freezer, depot] = WORLDS;
+		expect(isWorldUnlocked(home, 0)).toBe(true);
+		expect(isWorldUnlocked(ultraViolet, 2)).toBe(false);
+		expect(isWorldUnlocked(ultraViolet, 3)).toBe(true);
+		expect(isWorldUnlocked(freezer, 5)).toBe(false);
+		expect(isWorldUnlocked(depot, 9)).toBe(true);
+		expect(crossWorldMultiplier("home", ["home"])).toBe(1);
+		expect(crossWorldMultiplier("home", ["home", "ultra-violet-realm"])).toBe(
+			1.1
+		);
+		expect(
+			crossWorldMultiplier("home", ["ultra-violet-realm", "freezer-dimension"])
+		).toBe(1.2);
+	});
+
+	test("keeps locked worlds out of smart-stocker purchases", () => {
+		const progress: AchievementProgress = {
+			...createProgress(),
+			prestigeLevel: 2,
+		};
+		// Price every home producer past the 4.2M can budget so a world
+		// producer would be the only candidate if its world were considered.
+		progress.producers["pull-tab"] = 90;
+		progress.producers["mini-fridge"] = 77;
+		progress.producers["vending-machine"] = 60;
+		progress.producers["corner-shop"] = 42;
+		progress.producers["can-warehouse"] = 25;
+		progress.producers["filling-line"] = 12;
+		expect(bestStockerPurchase(progress, 4_200_000)).toBeNull();
+		progress.prestigeLevel = 3;
+		expect(bestStockerPurchase(progress, 4_200_000)).toBe("blacklight-still");
 	});
 });
 
