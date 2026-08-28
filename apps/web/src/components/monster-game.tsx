@@ -2,10 +2,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
+	bestStockerPurchase,
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
-	cheapestAffordableProducer,
 	clampGameValue,
 	clickBuffMultiplier,
 	countUnlockedAchievements,
@@ -20,6 +20,8 @@ import {
 	isGoldenUpgradeId,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
+	PRODUCER_SYNERGY_SOURCES,
 	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerId,
@@ -28,6 +30,7 @@ import {
 	RUN_UPGRADES,
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
+	SYNERGY_BONUS_PER_OWNED,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -214,6 +217,11 @@ type BuyQuantity = (typeof BUY_QUANTITIES)[number];
 const runUpgradesByCost = [...RUN_UPGRADES].sort(
 	(left, right) => left.cost - right.cost
 );
+
+const PRODUCER_NAME_BY_ID = new Map(
+	PRODUCERS.map(({ id, name }) => [id, name])
+);
+const SYNERGY_PERCENT = SYNERGY_BONUS_PER_OWNED * 100;
 
 const selectVisibleProducers = (game: GameSnapshot) => {
 	let highestOwnedIndex = -1;
@@ -597,6 +605,12 @@ const ShopCard = ({
 						{selectVisibleProducers(game).map((producer) => {
 							const owned = game.producers[producer.id];
 							const cost = producerBulkCost(producer.id, owned, buyQuantity);
+							const boostsName = PRODUCER_NAME_BY_ID.get(
+								PRODUCER_SYNERGIES[producer.id]
+							);
+							const boostedByName = PRODUCER_NAME_BY_ID.get(
+								PRODUCER_SYNERGY_SOURCES[producer.id]
+							);
 							return (
 								<li
 									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
@@ -607,6 +621,9 @@ const ShopCard = ({
 										<p className="text-muted-foreground">
 											{owned} owned · {formatGameNumber(producer.baseCps)} base
 											CPS
+										</p>
+										<p className="text-muted-foreground text-xs">
+											{`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
 										</p>
 									</div>
 									<Button
@@ -1344,7 +1361,7 @@ export const MonsterGame = () => {
 				isSmartStockerEnabled &&
 				current.goldenUpgrades["smart-stocker"] > 0
 			) {
-				const producerId = cheapestAffordableProducer(current, current.cans);
+				const producerId = bestStockerPurchase(current, current.cans);
 				if (producerId) {
 					buyProducerNow(producerId, "smart_stocker").catch(() => undefined);
 					return;

@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	acceptManualClicks,
+	bestStockerPurchase,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
-	cheapestAffordableProducer,
 	clampGameValue,
 	countUnlockedAchievements,
 	createHeadStartProducers,
@@ -21,11 +21,13 @@ import {
 	GOLDEN_UPGRADES,
 	goldenCanPotential,
 	goldenUpgradeCost,
+	isProducerId,
 	luckyCanGain,
 	MAX_GAME_VALUE,
 	MAX_PERSISTED_COUNTER,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
 	PRODUCERS,
 	prestigeReward,
 	producerBulkCost,
@@ -64,11 +66,49 @@ describe("Monster game economy", () => {
 		);
 	});
 
-	test("selects the cheapest producer by its current scaled price", () => {
+	test("selects the best value producer instead of the cheapest", () => {
 		const progress = createProgress();
-		progress.producers["pull-tab"] = 20;
-		expect(cheapestAffordableProducer(progress, 100)).toBe("mini-fridge");
-		expect(cheapestAffordableProducer(progress, 99)).toBeNull();
+		progress.producers["pull-tab"] = 30;
+		progress.producers["mini-fridge"] = 10;
+		// Pull Tab #31 costs ~993 cans for 0.1 CPS and Mini Fridge #11 ~404 cans
+		// for 1 CPS, while a Vending Machine costs 1100 for 8 CPS (+ synergy on
+		// Pull Tabs) — best value per can wins over lowest price.
+		expect(bestStockerPurchase(progress, 1500)).toBe("vending-machine");
+		expect(bestStockerPurchase(createProgress(), 14)).toBeNull();
+	});
+
+	test("synergies flip the stocker's best purchase", () => {
+		const progress = createProgress();
+		progress.producers["vending-machine"] = 50;
+		// A Mini Fridge (100 cans, 1 CPS) boosts 50 Vending Machines by +1%:
+		// 6 CPS for 100 cans beats a 15-can Pull Tab's 0.1 CPS.
+		expect(bestStockerPurchase(progress, 200)).toBe("mini-fridge");
+	});
+
+	test("every producer boosts a different producer", () => {
+		const targets = PRODUCERS.map(({ id }) => PRODUCER_SYNERGIES[id]);
+		// 18 distinct, valid, non-self targets => a fixed-point-free permutation.
+		expect(new Set(targets).size).toBe(PRODUCERS.length);
+		for (const { id } of PRODUCERS) {
+			expect(isProducerId(PRODUCER_SYNERGIES[id])).toBe(true);
+			expect(PRODUCER_SYNERGIES[id]).not.toBe(id);
+		}
+		expect(PRODUCER_SYNERGIES["vending-machine"]).toBe("pull-tab");
+		expect(PRODUCER_SYNERGIES["monster-singularity"]).toBe("can-portal");
+	});
+
+	test("producer synergies boost a different producer's output", () => {
+		const progress = createProgress();
+		progress.producers["pull-tab"] = 10;
+		progress.runUpgrades.push("pull-tab-10");
+		// 0.1 × 10 × 2 (milestone) × 1.01 (Stocked Up) = 2.02 CPS
+		expect(calculateCps(progress)).toBeCloseTo(2.02);
+		progress.producers["vending-machine"] = 1;
+		// Vending Machine boosts Pull Tab +1%: (2.02 × 1.01 + 8 × 1.01) = 10.1202
+		expect(calculateCps(progress)).toBeCloseTo(10.1202, 3);
+		progress.producers["vending-machine"] = 2;
+		// +2%: (2.02 × 1.02 + 16) × 1.01 = 18.2204
+		expect(calculateCps(progress)).toBeCloseTo(18.2204, 3);
 	});
 
 	test("keeps each producer base price within ten minutes of base output", () => {
