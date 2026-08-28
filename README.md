@@ -65,6 +65,29 @@ bun run dev
 Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
 The API is running at [http://localhost:6283](http://localhost:6283).
 
+## Season Events
+
+Every two weeks a themed season event rotates in automatically (schedule is
+deterministic — anchored at `SEASON_ANCHOR_MS` in
+[`packages/api/src/seasons.ts`](packages/api/src/seasons.ts), no cron needed).
+Each season is a fresh, equal-start mini-save with its own exclusive producers
+and upgrades; golden upgrades, prestige bonuses and achievements are excluded,
+so the season leaderboard is a pure fixed-ruleset race on season cans earned.
+
+- Season state lives in `season_state` keyed by `(user_id, season_id)`; past
+  seasons freeze automatically and each theme's shop is served from
+  `SEASON_THEMES`.
+- API: `season.current` (season info + snapshot + top-50 leaderboard + viewer
+  rank), `season.sync` (tap flush, same click budget mechanics as the main
+  game), `season.buyProducer`, `season.buyUpgrade`.
+- UI: the `SeasonPanel` card on the game page (taps, exclusive shop,
+  leaderboard).
+- Analytics: server event `game.season.joined` on first season save, client
+  events `game.season.viewed`, `game.season.tap`, `game.season.purchase.*`.
+
+Adding a theme is one `buildTheme(...)` entry in `SEASON_THEMES`; the rotation
+picks it up automatically.
+
 ## JSON Agent Game Mode
 
 Development and test servers expose `POST /api/game/json` so an AI agent can

@@ -20,6 +20,7 @@ const createRow = (): GameStateRow => ({
 	ascensionSparks: 0,
 	bestRunCans: 0,
 	cans: 0,
+	collection: [],
 	createdAt: new Date(0),
 	frenzyEndsAt: null,
 	frenzyStacks: 0,
@@ -41,6 +42,7 @@ const createRow = (): GameStateRow => ({
 	shadowBanned: false,
 	totalAscensionSparks: 0,
 	totalGoldenCans: 0,
+	unlockedAchievements: [],
 	updatedAt: new Date(0),
 	userId: "user",
 });

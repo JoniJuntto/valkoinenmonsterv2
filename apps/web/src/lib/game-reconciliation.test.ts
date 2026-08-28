@@ -43,6 +43,7 @@ const createSnapshot = (
 	serverNow: 1000,
 	totalAscensionSparks: 0,
 	totalGoldenCans: 0,
+	unlockedAchievements: [],
 	...overrides,
 });
 
