@@ -17,6 +17,7 @@ import {
 const createRow = (): GameStateRow => ({
 	bestRunCans: 0,
 	cans: 0,
+	collection: [],
 	createdAt: new Date(0),
 	frenzyEndsAt: null,
 	goldenCans: 0,

@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import {
 	FRENZY_DURATION_MS,
 	GOLDEN_RUSH_CLAIM_WINDOW_MS,
+	GOLDEN_RUSH_DROP_CHANCE,
 	producerBulkCost,
 } from "../game";
 
@@ -111,6 +112,24 @@ describe("server-authoritative mutations", () => {
 		const lucky = claimGoldenRush(0.1)(state, new Date(1000));
 		expect(lucky.cans).toBe(1_008_100);
 		expect(lucky.goldenRushBuffKind).toBeNull();
+	});
+
+	test("rolls codex drops from golden rush claims", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.goldenRushReadyAt = new Date(1000);
+		const dropped = claimGoldenRush(0.1, 0.1)(state, new Date(1000));
+		expect(dropped.collection).toEqual(["golden-flash"]);
+		const owned = { ...state, collection: ["golden-flash", "golden-storm"] };
+		const duplicate = claimGoldenRush(0.1, 0.1)(owned, new Date(1000));
+		expect(duplicate.collection).toEqual(["golden-flash", "golden-storm"]);
+		const missed = claimGoldenRush(0.1, GOLDEN_RUSH_DROP_CHANCE)(
+			state,
+			new Date(1000)
+		);
+		expect(missed.collection).toEqual([]);
+		const rushDrop = claimGoldenRush(0.5, 0.1)(state, new Date(1000));
+		expect(rushDrop.goldenRushBuffKind).toBe("click_rush");
+		expect(rushDrop.collection).toEqual(["golden-storm"]);
 	});
 
 	test("gives head-start producers on prestige", () => {

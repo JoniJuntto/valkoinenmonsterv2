@@ -3,11 +3,16 @@ import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
 	bestStockerPurchase,
+	CAN_VARIANTS,
 	CLICK_RUSH_MULTIPLIER,
+	COLLECTION_SETS,
+	type CollectionSetId,
 	calculateClickValue,
 	calculateCps,
 	clampGameValue,
 	clickBuffMultiplier,
+	collectionMultiplier,
+	completedCollectionSets,
 	countUnlockedAchievements,
 	formatGameNumber,
 	frenzyDurationMs,
@@ -922,6 +927,96 @@ const AchievementsCard = ({ game }: AchievementsCardProps) => {
 	);
 };
 
+interface CodexCardProps {
+	game: GameSnapshot;
+}
+
+const CodexCard = ({ game }: CodexCardProps) => {
+	const owned = new Set(game.collection);
+	const completed = new Set(completedCollectionSets(game.collection));
+	const bonusPercent = Math.round(
+		(collectionMultiplier(game.collection) - 1) * 100
+	);
+	return (
+		<Card className="order-6 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Codex
+				</CardTitle>
+				<CardDescription>
+					{owned.size}/{CAN_VARIANTS.length} cans collected · codex bonus +
+					{bonusPercent}% production
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="monster-shop max-h-[40svh] overflow-y-auto">
+				<div className="flex flex-col gap-3">
+					{COLLECTION_SETS.map((set) => {
+						const variants = CAN_VARIANTS.filter(
+							(variant) => variant.setId === set.id
+						);
+						const ownedCount = variants.filter((variant) =>
+							owned.has(variant.id)
+						).length;
+						const isComplete = completed.has(set.id);
+						return (
+							<section
+								className={cn("p-2", isComplete && "bg-muted/30")}
+								key={set.id}
+							>
+								<header className="flex items-baseline justify-between gap-2">
+									<span
+										className={cn("font-medium", isComplete && "text-primary")}
+									>
+										{isComplete ? "★" : "☆"} {set.name}
+									</span>
+									<span className="text-right text-muted-foreground">
+										{ownedCount}/{variants.length} · {set.description}
+										{isComplete ? "" : " when complete"}
+									</span>
+								</header>
+								<ul className="mt-1 grid gap-1 sm:grid-cols-2">
+									{variants.map((variant) => {
+										const isOwned = owned.has(variant.id);
+										return (
+											<li
+												className={cn(
+													"flex items-center gap-2 p-1",
+													!isOwned && "opacity-45"
+												)}
+												key={variant.id}
+												title={variant.description}
+											>
+												<span
+													aria-hidden="true"
+													className="inline-block h-3 w-2.5 shrink-0 rounded-[2px] border"
+													style={{
+														backgroundColor: isOwned
+															? variant.color
+															: "transparent",
+														borderColor: variant.color,
+													}}
+												/>
+												<span className="min-w-0">
+													<span className="block truncate font-medium">
+														{variant.name}
+													</span>
+													<span className="block truncate text-muted-foreground">
+														{variant.description}
+													</span>
+												</span>
+											</li>
+										);
+									})}
+								</ul>
+							</section>
+						);
+					})}
+				</div>
+			</CardContent>
+		</Card>
+	);
+};
+
 interface GoldenRushCanProps {
 	game: GameSnapshot;
 	onClaim: () => void;
@@ -985,6 +1080,8 @@ export const MonsterGame = () => {
 			window.localStorage.getItem("monster-smart-stocker") !== "false"
 	);
 	const unlockedAchievementIdsRef = useRef<Set<string> | null>(null);
+	const ownedVariantIdsRef = useRef<Set<string> | null>(null);
+	const completedSetIdsRef = useRef<Set<CollectionSetId> | null>(null);
 	const canAudioPoolRef = useRef<HTMLAudioElement[]>([]);
 	const canAudioIndexRef = useRef(0);
 	const dubstepAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1215,6 +1312,55 @@ export const MonsterGame = () => {
 		},
 		[]
 	);
+
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const owned = new Set(game.collection);
+		const previousVariants = ownedVariantIdsRef.current;
+		ownedVariantIdsRef.current = owned;
+		if (!(previousVariants && owned.size > previousVariants.size)) {
+			return;
+		}
+		for (const variant of CAN_VARIANTS) {
+			if (!owned.has(variant.id) || previousVariants.has(variant.id)) {
+				continue;
+			}
+			toast.success(`Can unlocked: ${variant.name}`, {
+				description: variant.description,
+			});
+			track(AnalyticsEvents.game.codexVariantUnlocked, {
+				prestige_level: game.prestigeLevel,
+				set_id: variant.setId,
+				variant_id: variant.id,
+			});
+		}
+	}, [game]);
+
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const completedSetIds = new Set(completedCollectionSets(game.collection));
+		const previousSets = completedSetIdsRef.current;
+		completedSetIdsRef.current = completedSetIds;
+		if (!previousSets) {
+			return;
+		}
+		for (const set of COLLECTION_SETS) {
+			if (!completedSetIds.has(set.id) || previousSets.has(set.id)) {
+				continue;
+			}
+			toast.success(`Set complete: ${set.name}`, {
+				description: `${set.description} codex bonus`,
+			});
+			track(AnalyticsEvents.game.codexSetCompleted, {
+				prestige_level: game.prestigeLevel,
+				set_id: set.id,
+			});
+		}
+	}, [game]);
 
 	const isFrenzyActive = game
 		? (game.frenzyEndsAt ?? 0) > game.serverNow
@@ -1614,6 +1760,7 @@ export const MonsterGame = () => {
 				viewerId={session.user.id}
 			/>
 			<AchievementsCard game={game} />
+			<CodexCard game={game} />
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>
 	);
