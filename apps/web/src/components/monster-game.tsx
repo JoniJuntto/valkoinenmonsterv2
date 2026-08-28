@@ -5,6 +5,7 @@ import {
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
+	calculateIdleGain,
 	cheapestAffordableProducer,
 	clampGameValue,
 	clickBuffMultiplier,
@@ -20,13 +21,13 @@ import {
 	goldenUpgradeCost,
 	isGoldenUpgradeId,
 	nextGoldenCanRequirement,
+	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
 	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerId,
 	prestigeReward,
 	producerBulkCost,
-	productionTimeMs,
 	RUN_UPGRADES,
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
@@ -217,16 +218,16 @@ const projectElapsed = (snapshot: GameSnapshot, now: number): GameSnapshot => {
 			? (snapshot.goldenRushBuffEndsAt ?? 0)
 			: 0;
 	const buffMs = Math.max(0, Math.min(now, buffEnd) - snapshot.lastAccruedAt);
-	const gain =
-		calculateCps(snapshot) *
-		(productionTimeMs(
-			snapshot,
-			elapsedMs,
-			frenzyMs,
-			buffMs,
-			PRODUCTION_FRENZY_MULTIPLIER
-		) /
-			1000);
+	const gain = calculateIdleGain(
+		snapshot,
+		elapsedMs,
+		frenzyMs,
+		elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS
+			? offlineProductionMultiplier(snapshot)
+			: 1,
+		buffMs,
+		PRODUCTION_FRENZY_MULTIPLIER
+	);
 	return {
 		...snapshot,
 		bestRunCans: clampGameValue(

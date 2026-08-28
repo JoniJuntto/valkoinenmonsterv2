@@ -1,9 +1,12 @@
 export const MAX_GAME_VALUE = 1e300;
+export const MAX_PERSISTED_COUNTER = 2_147_483_647;
+export const PRODUCER_COST_GROWTH = 1.15;
 export const FRENZY_MULTIPLIER = 10;
 export const FRENZY_DURATION_MS = 8000;
 export const GOLDEN_CAN_BASE = 1_000_000;
 export const MANUAL_CLICKS_PER_SECOND = 20;
 export const MAX_MANUAL_CLICK_BUDGET = 120;
+export const OFFLINE_ACCRUAL_THRESHOLD_MS = 15_000;
 export const OFFLINE_PRODUCTION_MULTIPLIER = 0.1;
 export const CLICK_UPGRADE_MULTIPLIER = 2;
 export const CPS_CLICK_PERCENT = 0.01;
@@ -42,79 +45,79 @@ export const PRODUCERS = [
 		name: "Can Warehouse",
 	},
 	{
-		baseCost: 1_400_000,
+		baseCost: 840_000,
 		baseCps: 1400,
 		id: "filling-line",
 		name: "Filling Line",
 	},
 	{
-		baseCost: 20_000_000,
+		baseCost: 4_680_000,
 		baseCps: 7800,
 		id: "monster-mine",
 		name: "Monster Mine",
 	},
 	{
-		baseCost: 330_000_000,
+		baseCost: 26_400_000,
 		baseCps: 44_000,
 		id: "white-reactor",
 		name: "White Reactor",
 	},
 	{
-		baseCost: 5_100_000_000,
+		baseCost: 156_000_000,
 		baseCps: 260_000,
 		id: "can-portal",
 		name: "Can Portal",
 	},
 	{
-		baseCost: 75_000_000_000,
+		baseCost: 960_000_000,
 		baseCps: 1_600_000,
 		id: "monster-singularity",
 		name: "Monster Singularity",
 	},
 	{
-		baseCost: 1.1e12,
+		baseCost: 5_760_000_000,
 		baseCps: 9_600_000,
 		id: "taurine-comet",
 		name: "Taurine Comet",
 	},
 	{
-		baseCost: 1.6e13,
+		baseCost: 34_800_000_000,
 		baseCps: 58_000_000,
 		id: "caffeine-nebula",
 		name: "Caffeine Nebula",
 	},
 	{
-		baseCost: 2.4e14,
+		baseCost: 210_000_000_000,
 		baseCps: 350_000_000,
 		id: "white-hole",
 		name: "White Hole",
 	},
 	{
-		baseCost: 3.6e15,
+		baseCost: 1_260_000_000_000,
 		baseCps: 2_100_000_000,
 		id: "monster-galaxy",
 		name: "Monster Galaxy",
 	},
 	{
-		baseCost: 5.4e16,
+		baseCost: 7_560_000_000_000,
 		baseCps: 12_600_000_000,
 		id: "dimension-dispenser",
 		name: "Dimension Dispenser",
 	},
 	{
-		baseCost: 8.1e17,
+		baseCost: 45_600_000_000_000,
 		baseCps: 76_000_000_000,
 		id: "time-brewery",
 		name: "Time Brewery",
 	},
 	{
-		baseCost: 1.2e19,
+		baseCost: 276_000_000_000_000,
 		baseCps: 460_000_000_000,
 		id: "cosmic-six-pack",
 		name: "Cosmic Six-Pack",
 	},
 	{
-		baseCost: 1.8e20,
+		baseCost: 1_680_000_000_000_000,
 		baseCps: 2_800_000_000_000,
 		id: "the-beast",
 		name: "The Beast",
@@ -165,12 +168,16 @@ export const CLICK_UPGRADES: RunUpgradeDefinition[] = [
 
 export const CPS_CLICK_UPGRADES: RunUpgradeDefinition[] = [
 	{ cost: 50_000_000, id: "sticky-fingers", name: "Sticky Fingers" },
-	{ cost: 5_000_000_000, id: "monster-reflexes", name: "Monster Reflexes" },
-	{ cost: 500_000_000_000, id: "caffeine-overload", name: "Caffeine Overload" },
-	{ cost: 5e13, id: "liquid-lightning", name: "Liquid Lightning" },
-	{ cost: 5e15, id: "taurine-trance", name: "Taurine Trance" },
-	{ cost: 5e17, id: "hypersonic-hands", name: "Hypersonic Hands" },
-	{ cost: 5e19, id: "beast-mode", name: "Beast Mode" },
+	{ cost: 1_000_000_000, id: "monster-reflexes", name: "Monster Reflexes" },
+	{ cost: 20_000_000_000, id: "caffeine-overload", name: "Caffeine Overload" },
+	{ cost: 400_000_000_000, id: "liquid-lightning", name: "Liquid Lightning" },
+	{ cost: 8_000_000_000_000, id: "taurine-trance", name: "Taurine Trance" },
+	{
+		cost: 160_000_000_000_000,
+		id: "hypersonic-hands",
+		name: "Hypersonic Hands",
+	},
+	{ cost: 3_200_000_000_000_000, id: "beast-mode", name: "Beast Mode" },
 ].map((upgrade) => ({
 	...upgrade,
 	description: "Clicks also earn +1% of your cans per second",
@@ -179,23 +186,35 @@ export const CPS_CLICK_UPGRADES: RunUpgradeDefinition[] = [
 
 export const FLAVOR_UPGRADES: RunUpgradeDefinition[] = [
 	{ cost: 1_000_000, id: "ultra-white", name: "Ultra White" },
-	{ cost: 50_000_000, id: "ultra-blue", name: "Ultra Blue" },
-	{ cost: 2_500_000_000, id: "ultra-rosa", name: "Ultra Rosa" },
-	{ cost: 125_000_000_000, id: "ultra-gold", name: "Ultra Gold" },
-	{ cost: 6_250_000_000_000, id: "ultra-paradise", name: "Ultra Paradise" },
-	{ cost: 312_500_000_000_000, id: "ultra-black", name: "Ultra Black" },
-	{ cost: 1.5625e16, id: "ultra-violet", name: "Ultra Violet" },
-	{ cost: 7.8125e17, id: "ultra-red", name: "Ultra Red" },
-	{ cost: 3.906_25e19, id: "ultra-fiesta", name: "Ultra Fiesta" },
-	{ cost: 1.953_125e21, id: "ultra-watermelon", name: "Ultra Watermelon" },
-	{ cost: 9.765_625e22, id: "ultra-peachy-keen", name: "Ultra Peachy Keen" },
+	{ cost: 10_000_000, id: "ultra-blue", name: "Ultra Blue" },
+	{ cost: 100_000_000, id: "ultra-rosa", name: "Ultra Rosa" },
+	{ cost: 1_000_000_000, id: "ultra-gold", name: "Ultra Gold" },
+	{ cost: 10_000_000_000, id: "ultra-paradise", name: "Ultra Paradise" },
+	{ cost: 100_000_000_000, id: "ultra-black", name: "Ultra Black" },
+	{ cost: 1_000_000_000_000, id: "ultra-violet", name: "Ultra Violet" },
+	{ cost: 10_000_000_000_000, id: "ultra-red", name: "Ultra Red" },
+	{ cost: 100_000_000_000_000, id: "ultra-fiesta", name: "Ultra Fiesta" },
 	{
-		cost: 4.882_812_5e24,
+		cost: 1_000_000_000_000_000,
+		id: "ultra-watermelon",
+		name: "Ultra Watermelon",
+	},
+	{
+		cost: 10_000_000_000_000_000,
+		id: "ultra-peachy-keen",
+		name: "Ultra Peachy Keen",
+	},
+	{
+		cost: 100_000_000_000_000_000,
 		id: "ultra-strawberry-dreams",
 		name: "Ultra Strawberry Dreams",
 	},
-	{ cost: 2.441_406_25e26, id: "mango-loco", name: "Mango Loco" },
-	{ cost: 1.220_703_125e28, id: "pipeline-punch", name: "Pipeline Punch" },
+	{ cost: 1_000_000_000_000_000_000, id: "mango-loco", name: "Mango Loco" },
+	{
+		cost: 10_000_000_000_000_000_000,
+		id: "pipeline-punch",
+		name: "Pipeline Punch",
+	},
 ].map((upgrade) => ({
 	...upgrade,
 	description: "Double all production",
@@ -430,6 +449,12 @@ export const clampGameValue = (value: number): number => {
 	return value;
 };
 
+export const clampGameCounter = (value: number): number =>
+	Math.min(
+		MAX_PERSISTED_COUNTER,
+		Math.max(0, Math.floor(Number.isFinite(value) ? value : 0))
+	);
+
 export const formatGameNumber = (value: number): string => {
 	const safeValue = clampGameValue(value);
 	return safeValue >= 1e15
@@ -462,7 +487,10 @@ export const producerCost = (producerId: ProducerId, owned: number): number => {
 	if (!producer) {
 		return MAX_GAME_VALUE;
 	}
-	return clampGameValue(Math.floor(producer.baseCost * 1.15 ** owned));
+	const safeOwned = Math.max(0, Math.floor(owned));
+	return clampGameValue(
+		Math.floor(producer.baseCost * PRODUCER_COST_GROWTH ** safeOwned)
+	);
 };
 
 export const producerBulkCost = (
@@ -470,8 +498,9 @@ export const producerBulkCost = (
 	owned: number,
 	quantity: number
 ): number => {
+	const safeQuantity = Math.max(0, Math.floor(quantity));
 	let total = 0;
-	for (let index = 0; index < quantity; index += 1) {
+	for (let index = 0; index < safeQuantity; index += 1) {
 		total += producerCost(producerId, owned + index);
 	}
 	return clampGameValue(total);
@@ -788,16 +817,20 @@ export const calculateIdleGain = (
 	);
 
 export const goldenCanPotential = (lifetimeCans: number): number =>
-	Math.floor(Math.sqrt(clampGameValue(lifetimeCans) / GOLDEN_CAN_BASE));
+	clampGameCounter(Math.sqrt(clampGameValue(lifetimeCans) / GOLDEN_CAN_BASE));
 
 export const prestigeReward = (
 	lifetimeCans: number,
 	totalGoldenCans: number
 ): number =>
-	Math.max(0, goldenCanPotential(lifetimeCans) - Math.max(0, totalGoldenCans));
+	clampGameCounter(
+		goldenCanPotential(lifetimeCans) - Math.max(0, Math.floor(totalGoldenCans))
+	);
 
 export const nextGoldenCanRequirement = (totalGoldenCans: number): number =>
-	clampGameValue(GOLDEN_CAN_BASE * (Math.max(0, totalGoldenCans) + 1) ** 2);
+	clampGameValue(
+		GOLDEN_CAN_BASE * (Math.max(0, Math.floor(totalGoldenCans)) + 1) ** 2
+	);
 
 export const frenzyChance = (progress: GameProgress): number =>
 	0.005 * (1 + progress.goldenUpgrades["frenzy-magnet"] * 0.25);

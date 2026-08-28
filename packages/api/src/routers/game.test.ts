@@ -97,6 +97,9 @@ describe("server-authoritative mutations", () => {
 		expect(() =>
 			claimGoldenRush(0.5)(state, new Date(1001 + GOLDEN_RUSH_CLAIM_WINDOW_MS))
 		).toThrow("The golden can is gone");
+		expect(() =>
+			claimGoldenRush(0.5)(state, new Date(1000 + GOLDEN_RUSH_CLAIM_WINDOW_MS))
+		).not.toThrow();
 
 		const buffed = claimGoldenRush(0.5)(state, new Date(1000));
 		expect(buffed.goldenRushBuffKind).toBe("click_rush");
@@ -120,24 +123,49 @@ describe("server-authoritative mutations", () => {
 		expect(reset.producers["taurine-comet"]).toBe(0);
 	});
 
-	test("resets run progress while preserving permanent progress", () => {
+	test("resets and preserves every prestige field by contract", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.cans = 120_000;
 		state.runCans = 400_000;
-		state.lifetimeCans = 4_000_000;
+		state.bestRunCans = 300_000;
+		state.lifetimeCans = 25_000_000;
 		state.producers["mini-fridge"] = 4;
 		state.runUpgrades.push("cold-can");
 		state.goldenUpgrades["golden-grip"] = 2;
+		state.goldenUpgrades["head-start"] = 2;
+		state.goldenCans = 1;
+		state.totalGoldenCans = 3;
+		state.prestigeLevel = 6;
+		state.manualClickBudget = 37.5;
+		state.lastAccruedAt = new Date(1234);
+		state.frenzyEndsAt = new Date(2000);
+		state.goldenRushReadyAt = new Date(3000);
+		state.goldenRushBuffKind = "production_frenzy";
+		state.goldenRushBuffEndsAt = new Date(4000);
+		state.shadowBanned = true;
 		const reset = prestige(state, new Date(0));
 		expect(reset.cans).toBe(0);
 		expect(reset.runCans).toBe(0);
-		expect(reset.producers["mini-fridge"]).toBe(0);
+		expect(reset.bestRunCans).toBe(400_000);
+		expect(reset.producers["pull-tab"]).toBe(25);
+		expect(reset.producers["monster-singularity"]).toBe(25);
+		expect(reset.producers["taurine-comet"]).toBe(0);
 		expect(reset.runUpgrades).toEqual([]);
-		expect(reset.lifetimeCans).toBe(4_000_000);
+		expect(reset.lifetimeCans).toBe(25_000_000);
 		expect(reset.goldenUpgrades["golden-grip"]).toBe(2);
-		expect(reset.goldenCans).toBe(2);
-		expect(reset.totalGoldenCans).toBe(2);
-		expect(reset.prestigeLevel).toBe(1);
+		expect(reset.goldenCans).toBe(3);
+		expect(reset.totalGoldenCans).toBe(5);
+		expect(reset.prestigeLevel).toBe(7);
+		expect(reset.frenzyEndsAt).toBeNull();
+		expect(reset.nextFrenzyClick).toBeGreaterThanOrEqual(1);
+		expect(reset.manualClickBudget).toBe(37.5);
+		expect(reset.lastAccruedAt).toEqual(new Date(1234));
+		expect(reset.goldenRushReadyAt).toEqual(new Date(3000));
+		expect(reset.goldenRushBuffKind).toBe("production_frenzy");
+		expect(reset.goldenRushBuffEndsAt).toEqual(new Date(4000));
+		expect(reset.userId).toBe("user");
+		expect(reset.createdAt).toEqual(new Date(0));
+		expect(reset.shadowBanned).toBe(true);
 	});
 
 	test("only awards golden cans past the next square-root threshold", () => {
@@ -156,6 +184,16 @@ describe("server-authoritative mutations", () => {
 });
 
 describe("server accrual and leaderboard", () => {
+	test("switches to offline production at exactly 15 seconds", () => {
+		const online = createDefaultGameState("online", new Date(0));
+		online.producers["mini-fridge"] = 1;
+		expect(accrueState(online, 0, new Date(14_999)).cans).toBeCloseTo(14.999);
+
+		const offline = createDefaultGameState("offline", new Date(0));
+		offline.producers["mini-fridge"] = 1;
+		expect(accrueState(offline, 0, new Date(15_000)).cans).toBeCloseTo(1.5);
+	});
+
 	test("accrues long offline intervals at 10% without a time cap", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.producers["mini-fridge"] = 1;
@@ -275,6 +313,19 @@ describe("JSON agent game mode", () => {
 		const autoPurchased = advanceOpenState(stocked, 10_000, now);
 		expect(autoPurchased.producers["pull-tab"]).toBe(2);
 		expect(autoPurchased.cans).toBe(968.5);
+	});
+
+	test("rebases simulated Golden Rush timers to real server time", () => {
+		const now = new Date(10_000);
+		const state = createDefaultGameState("user", now);
+		state.goldenRushReadyAt = new Date(15_000);
+		state.goldenRushBuffKind = "click_rush";
+		state.goldenRushBuffEndsAt = new Date(18_000);
+
+		const advanced = advanceOpenState(state, 2000, now);
+		expect(advanced.goldenRushReadyAt?.getTime()).toBe(13_000);
+		expect(advanced.goldenRushBuffEndsAt?.getTime()).toBe(16_000);
+		expect(advanced.goldenRushBuffKind).toBe("click_rush");
 	});
 
 	test("rebases active frenzy time and resets only gameplay progress", () => {

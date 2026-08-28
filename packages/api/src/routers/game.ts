@@ -18,6 +18,7 @@ import {
 	calculateCps,
 	calculateIdleGain,
 	cheapestAffordableProducer,
+	clampGameCounter,
 	clampGameValue,
 	createHeadStartProducers,
 	createInitialGoldenUpgrades,
@@ -28,21 +29,17 @@ import {
 	type GameSnapshot,
 	GOLDEN_RUSH_CLAIM_WINDOW_MS,
 	GOLDEN_UPGRADES,
-	type GoldenRushBuffKind,
 	type GoldenRushReward,
-	type GoldenUpgradeRanks,
 	getGoldenUpgrade,
 	getRunUpgrade,
 	goldenUpgradeCost,
-	isGoldenRushBuffKind,
 	isGoldenUpgradeId,
 	isProducerId,
-	isRunUpgradeId,
 	nextGoldenCanRequirement,
+	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
 	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
-	type ProducerCounts,
 	prestigeReward,
 	producerBulkCost,
 	producerCost,
@@ -51,9 +48,13 @@ import {
 	rollGoldenRushDelayMs,
 	rollGoldenRushReward,
 } from "../game";
+import {
+	assertProgressionInvariants,
+	type MutableGameState,
+	normalizePersistedGameState,
+} from "../game-state";
 import { protectedProcedure, router } from "../index";
 
-const OFFLINE_AFTER_MS = 15_000;
 const AGENT_HEARTBEAT_MS = 5000;
 const MAX_AGENT_WAIT_MS = 60 * 60 * 1000;
 
@@ -107,11 +108,6 @@ export const agentGameCommandSchema = z.discriminatedUnion("action", [
 
 export type MutationInput = z.infer<typeof mutationInput>;
 export type AgentGameCommand = z.infer<typeof agentGameCommandSchema>;
-export type MutableGameState = Omit<
-	GameStateRow,
-	"producers" | "goldenUpgrades" | "goldenRushBuffKind"
-> &
-	GameProgress & { goldenRushBuffKind: GoldenRushBuffKind | null };
 type GameMutation = (state: MutableGameState, now: Date) => MutableGameState;
 
 const secureRandom = (): number => {
@@ -119,44 +115,6 @@ const secureRandom = (): number => {
 	crypto.getRandomValues(values);
 	return (values[0] ?? 0) / 2 ** 32;
 };
-
-const normalizeProducers = (value: Record<string, number>): ProducerCounts => {
-	const producers = createInitialProducers();
-	for (const producer of PRODUCERS) {
-		const owned = value[producer.id];
-		if (Number.isFinite(owned) && owned !== undefined) {
-			producers[producer.id] = Math.max(0, Math.floor(owned));
-		}
-	}
-	return producers;
-};
-
-const normalizeGoldenUpgrades = (
-	value: Record<string, number>
-): GoldenUpgradeRanks => {
-	const upgrades = createInitialGoldenUpgrades();
-	for (const upgrade of GOLDEN_UPGRADES) {
-		const rank = value[upgrade.id];
-		if (Number.isFinite(rank) && rank !== undefined) {
-			upgrades[upgrade.id] = Math.min(
-				upgrade.maxRank,
-				Math.max(0, Math.floor(rank))
-			);
-		}
-	}
-	return upgrades;
-};
-
-const normalizeState = (state: GameStateRow): MutableGameState => ({
-	...state,
-	goldenRushBuffKind:
-		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
-			? state.goldenRushBuffKind
-			: null,
-	goldenUpgrades: normalizeGoldenUpgrades(state.goldenUpgrades),
-	producers: normalizeProducers(state.producers),
-	runUpgrades: state.runUpgrades.filter(isRunUpgradeId),
-});
 
 export const createDefaultGameState = (
 	userId: string,
@@ -250,7 +208,9 @@ const accrueStateWithResult = (
 			? Math.max(0, Math.min(nowMs, buffEndMs) - previousMs)
 			: 0;
 	const offlineMultiplier =
-		elapsedMs >= OFFLINE_AFTER_MS ? offlineProductionMultiplier(state) : 1;
+		elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS
+			? offlineProductionMultiplier(state)
+			: 1;
 	const idleGain = calculateIdleGain(
 		state,
 		elapsedMs,
@@ -351,8 +311,12 @@ const mutateGameStateWithState = async (
 	mutation: GameMutation = (state) => state,
 	reportIdle = false
 ): Promise<GameMutationResult> => {
-	const current = normalizeState(await ensureGameState(userId));
 	const serverNow = Date.now();
+	const now = new Date(serverNow);
+	const current = normalizePersistedGameState(
+		await ensureGameState(userId),
+		now
+	);
 	const disposition = getMutationDisposition(current, input);
 	if (disposition === "retry") {
 		return {
@@ -363,13 +327,13 @@ const mutateGameStateWithState = async (
 		};
 	}
 
-	const now = new Date(serverNow);
 	const accrual = accrueStateWithResult(
 		current,
 		input.pendingManualClicks,
 		now
 	);
 	const mutated = mutation(accrual.state, now);
+	assertProgressionInvariants(mutated, now);
 	const [saved] = await db
 		.update(gameState)
 		.set({
@@ -391,10 +355,10 @@ const mutateGameStateWithState = async (
 			message: "Game state changed; reloading save",
 		});
 	}
-	const normalized = normalizeState(saved);
+	const normalized = normalizePersistedGameState(saved, now);
 	let snapshot = toSnapshot(normalized, isAnonymous, serverNow);
 	const idleElapsedMs = serverNow - current.lastAccruedAt.getTime();
-	if (reportIdle && idleElapsedMs >= OFFLINE_AFTER_MS) {
+	if (reportIdle && idleElapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS) {
 		snapshot = {
 			...snapshot,
 			idleReport: {
@@ -451,7 +415,10 @@ const getGameState = async (
 	userId: string,
 	isAnonymous: boolean
 ): Promise<GameSnapshot> => {
-	const current = await ensureGameState(userId);
+	const current = normalizePersistedGameState(
+		await ensureGameState(userId),
+		new Date()
+	);
 	return mutateGameState(
 		userId,
 		isAnonymous,
@@ -525,12 +492,30 @@ export const advanceOpenState = (
 		0,
 		(nextState.frenzyEndsAt?.getTime() ?? 0) - simulatedNow
 	);
+	const goldenRushRemainingMs = Math.max(
+		0,
+		(nextState.goldenRushReadyAt?.getTime() ?? 0) - simulatedNow
+	);
+	const goldenRushBuffRemainingMs = Math.max(
+		0,
+		(nextState.goldenRushBuffEndsAt?.getTime() ?? 0) - simulatedNow
+	);
 	return {
 		...nextState,
 		frenzyEndsAt:
 			frenzyRemainingMs > 0
 				? new Date(now.getTime() + frenzyRemainingMs)
 				: null,
+		goldenRushBuffEndsAt:
+			goldenRushBuffRemainingMs > 0
+				? new Date(now.getTime() + goldenRushBuffRemainingMs)
+				: null,
+		goldenRushBuffKind:
+			goldenRushBuffRemainingMs > 0 ? nextState.goldenRushBuffKind : null,
+		goldenRushReadyAt:
+			goldenRushRemainingMs > 0
+				? new Date(now.getTime() + goldenRushRemainingMs)
+				: now,
 		lastAccruedAt: now,
 	};
 };
@@ -652,9 +637,9 @@ export const prestige: GameMutation = (state) => {
 		bestRunCans: Math.max(state.bestRunCans, state.runCans),
 		cans: 0,
 		frenzyEndsAt: null,
-		goldenCans: state.goldenCans + reward,
+		goldenCans: clampGameCounter(state.goldenCans + reward),
 		nextFrenzyClick: randomFrenzyThreshold(nextProgress, secureRandom()),
-		prestigeLevel: state.prestigeLevel + 1,
+		prestigeLevel: clampGameCounter(state.prestigeLevel + 1),
 		runCans: 0,
 	};
 };
@@ -719,7 +704,10 @@ export const gameRouter = router({
 	prestige: protectedProcedure
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
-			const before = normalizeState(await ensureGameState(ctx.session.user.id));
+			const before = normalizePersistedGameState(
+				await ensureGameState(ctx.session.user.id),
+				new Date()
+			);
 			const requirement = nextGoldenCanRequirement(before.totalGoldenCans);
 			const reward = prestigeReward(
 				before.lifetimeCans,
@@ -1034,7 +1022,10 @@ export const runAgentGameCommand = async (
 	isAnonymous: boolean,
 	command: AgentGameCommand
 ) => {
-	const current = await ensureGameState(userId);
+	const current = normalizePersistedGameState(
+		await ensureGameState(userId),
+		new Date()
+	);
 	const mutationResult = await mutateGameStateWithState(
 		userId,
 		isAnonymous,
