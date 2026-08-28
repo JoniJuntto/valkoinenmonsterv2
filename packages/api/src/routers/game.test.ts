@@ -58,6 +58,17 @@ describe("server-authoritative mutations", () => {
 		expect(purchased.producers["pull-tab"]).toBe(1);
 	});
 
+	test("rejects locked-world producers until prestige unlocks them", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.cans = 4_200_000;
+		expect(() => buyProducer("blacklight-still")(state, new Date(0))).toThrow(
+			"World is locked"
+		);
+		state.prestigeLevel = 3;
+		const purchased = buyProducer("blacklight-still")(state, new Date(0));
+		expect(purchased.producers["blacklight-still"]).toBe(1);
+	});
+
 	test("enforces milestone and golden upgrade gates", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.cans = 10_000;

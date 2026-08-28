@@ -124,8 +124,179 @@ export const PRODUCERS = [
 	},
 ] as const;
 
-export type ProducerId = (typeof PRODUCERS)[number]["id"];
+const ULTRA_VIOLET_PRODUCERS = [
+	{
+		baseCost: 4_200_000,
+		baseCps: 7000,
+		id: "blacklight-still",
+		name: "Blacklight Still",
+	},
+	{ baseCost: 42_000_000, baseCps: 70_000, id: "glow-vat", name: "Glow Vat" },
+	{
+		baseCost: 420_000_000,
+		baseCps: 700_000,
+		id: "prism-refinery",
+		name: "Prism Refinery",
+	},
+	{
+		baseCost: 4_200_000_000,
+		baseCps: 7_000_000,
+		id: "uv-infuser",
+		name: "UV Infuser",
+	},
+	{
+		baseCost: 42_000_000_000,
+		baseCps: 70_000_000,
+		id: "spectral-chiller",
+		name: "Spectral Chiller",
+	},
+	{
+		baseCost: 420_000_000_000,
+		baseCps: 700_000_000,
+		id: "violet-crown",
+		name: "Violet Crown",
+	},
+	{
+		baseCost: 4_200_000_000_000,
+		baseCps: 7_000_000_000,
+		id: "neon-bottler",
+		name: "Neon Bottler",
+	},
+] as const;
+
+const FREEZER_DIMENSION_PRODUCERS = [
+	{
+		baseCost: 900_000_000,
+		baseCps: 1_500_000,
+		id: "frost-coil",
+		name: "Frost Coil",
+	},
+	{
+		baseCost: 9_000_000_000,
+		baseCps: 15_000_000,
+		id: "ice-vault",
+		name: "Ice Vault",
+	},
+	{
+		baseCost: 90_000_000_000,
+		baseCps: 150_000_000,
+		id: "cryo-brewer",
+		name: "Cryo Brewer",
+	},
+	{
+		baseCost: 900_000_000_000,
+		baseCps: 1_500_000_000,
+		id: "deep-freeze",
+		name: "Deep Freeze",
+	},
+	{
+		baseCost: 9_000_000_000_000,
+		baseCps: 15_000_000_000,
+		id: "glacier-line",
+		name: "Glacier Line",
+	},
+	{
+		baseCost: 90_000_000_000_000,
+		baseCps: 150_000_000_000,
+		id: "subzero-core",
+		name: "Subzero Core",
+	},
+	{
+		baseCost: 900_000_000_000_000,
+		baseCps: 1_500_000_000_000,
+		id: "absolute-chiller",
+		name: "Absolute Chiller",
+	},
+] as const;
+
+const DEPOT_PRODUCERS = [
+	{
+		baseCost: 240_000_000_000,
+		baseCps: 400_000_000,
+		id: "pallet-rack",
+		name: "Pallet Rack",
+	},
+	{
+		baseCost: 2_400_000_000_000,
+		baseCps: 4_000_000_000,
+		id: "forklift-fleet",
+		name: "Forklift Fleet",
+	},
+	{
+		baseCost: 24_000_000_000_000,
+		baseCps: 40_000_000_000,
+		id: "cargo-crane",
+		name: "Cargo Crane",
+	},
+	{
+		baseCost: 240_000_000_000_000,
+		baseCps: 400_000_000_000,
+		id: "rail-siding",
+		name: "Rail Siding",
+	},
+	{
+		baseCost: 2_400_000_000_000_000,
+		baseCps: 4_000_000_000_000,
+		id: "freight-yard",
+		name: "Freight Yard",
+	},
+	{
+		baseCost: 24_000_000_000_000_000,
+		baseCps: 40_000_000_000_000,
+		id: "orbital-depot",
+		name: "Orbital Depot",
+	},
+	{
+		baseCost: 240_000_000_000_000_000,
+		baseCps: 400_000_000_000_000,
+		id: "the-manifest",
+		name: "The Manifest",
+	},
+] as const;
+
+export const WORLD_CROSS_BONUS = 0.1;
+
+export const WORLDS = [
+	{ id: "home", name: "Home Realm", producers: PRODUCERS, unlockPrestige: 0 },
+	{
+		id: "ultra-violet-realm",
+		name: "Ultra Violet Realm",
+		producers: ULTRA_VIOLET_PRODUCERS,
+		unlockPrestige: 3,
+	},
+	{
+		id: "freezer-dimension",
+		name: "Freezer Dimension",
+		producers: FREEZER_DIMENSION_PRODUCERS,
+		unlockPrestige: 6,
+	},
+	{
+		id: "the-depot",
+		name: "The Depot",
+		producers: DEPOT_PRODUCERS,
+		unlockPrestige: 9,
+	},
+] as const;
+
+export type WorldId = (typeof WORLDS)[number]["id"];
+export type WorldDefinition = (typeof WORLDS)[number];
+
+export const ALL_PRODUCERS = WORLDS.flatMap((world) => [...world.producers]);
+
+export type ProducerId = (typeof ALL_PRODUCERS)[number]["id"];
 export type ProducerCounts = Record<ProducerId, number>;
+
+export const isWorldUnlocked = (
+	world: Pick<WorldDefinition, "unlockPrestige">,
+	prestigeLevel: number
+): boolean => prestigeLevel >= world.unlockPrestige;
+
+export const worldOfProducer = (
+	producerId: string
+): WorldDefinition | undefined =>
+	WORLDS.find((world) =>
+		world.producers.some((producer) => producer.id === producerId)
+	);
 
 export const ORIGINAL_PRODUCER_LINEUP_SIZE = 10;
 export const HEAD_START_COUNTS = [0, 10, 25, 50, 100] as const;
@@ -226,7 +397,7 @@ const MILESTONE_COST_MULTIPLIERS = [
 	30, 250, 2500, 25_000, 250_000, 2_500_000, 25_000_000, 250_000_000,
 ] as const;
 
-const milestoneUpgrades: RunUpgradeDefinition[] = PRODUCERS.flatMap(
+const milestoneUpgrades: RunUpgradeDefinition[] = ALL_PRODUCERS.flatMap(
 	(producer) =>
 		MILESTONES.map((requiredOwned, index) => ({
 			cost: producer.baseCost * (MILESTONE_COST_MULTIPLIERS[index] ?? 1),
@@ -390,7 +561,8 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	serverNow: number;
 }
 
-const producerIds = new Set<string>(PRODUCERS.map(({ id }) => id));
+const producerIds = new Set<string>(ALL_PRODUCERS.map(({ id }) => id));
+const producerById = new Map(ALL_PRODUCERS.map((p) => [p.id, p]));
 const runUpgradeById = new Map(
 	RUN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
 );
@@ -409,7 +581,7 @@ const scientificNumberFormatter = new Intl.NumberFormat("en", {
 
 export const createInitialProducers = (): ProducerCounts => {
 	const producers = {} as ProducerCounts;
-	for (const producer of PRODUCERS) {
+	for (const producer of ALL_PRODUCERS) {
 		producers[producer.id] = 0;
 	}
 	return producers;
@@ -483,7 +655,7 @@ export const getGoldenUpgrade = (id: GoldenUpgradeId) =>
 	goldenUpgradeById.get(id);
 
 export const producerCost = (producerId: ProducerId, owned: number): number => {
-	const producer = PRODUCERS.find(({ id }) => id === producerId);
+	const producer = producerById.get(producerId);
 	if (!producer) {
 		return MAX_GAME_VALUE;
 	}
@@ -507,17 +679,22 @@ export const producerBulkCost = (
 };
 
 export const cheapestAffordableProducer = (
-	progress: GameProgress,
+	progress: AchievementProgress,
 	cans: number
 ): ProducerId | null => {
 	let cheapestId: ProducerId | null = null;
 	let cheapestCost = MAX_GAME_VALUE;
 
-	for (const producer of PRODUCERS) {
-		const cost = producerCost(producer.id, progress.producers[producer.id]);
-		if (cost <= cans && cost < cheapestCost) {
-			cheapestCost = cost;
-			cheapestId = producer.id;
+	for (const world of WORLDS) {
+		if (!isWorldUnlocked(world, progress.prestigeLevel ?? 0)) {
+			continue;
+		}
+		for (const producer of world.producers) {
+			const cost = producerCost(producer.id, progress.producers[producer.id]);
+			if (cost <= cans && cost < cheapestCost) {
+				cheapestCost = cost;
+				cheapestId = producer.id;
+			}
 		}
 	}
 
@@ -583,7 +760,7 @@ export interface AchievementDefinition {
 
 const totalProducersOwned = (progress: GameProgress): number => {
 	let total = 0;
-	for (const producer of PRODUCERS) {
+	for (const producer of ALL_PRODUCERS) {
 		total += progress.producers[producer.id];
 	}
 	return total;
@@ -651,7 +828,7 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
 			totalProducersOwned(progress) >= threshold,
 		name,
 	})),
-	...PRODUCERS.map((producer) => ({
+	...ALL_PRODUCERS.map((producer) => ({
 		description: `Own ${CENTURY_ACHIEVEMENT_THRESHOLD}× ${producer.name}`,
 		id: `${producer.id}-century`,
 		isUnlocked: (progress: AchievementProgress) =>
@@ -696,15 +873,45 @@ export const countUnlockedAchievements = (
 const achievementMultiplier = (progress: AchievementProgress): number =>
 	1 + countUnlockedAchievements(progress) * ACHIEVEMENT_PRODUCTION_BONUS;
 
+export const crossWorldMultiplier = (
+	worldId: string,
+	ownedWorldIds: readonly string[]
+): number =>
+	1 + ownedWorldIds.filter((id) => id !== worldId).length * WORLD_CROSS_BONUS;
+
+const ownedWorldIdsInRun = (progress: AchievementProgress): string[] => {
+	const ownedIds: string[] = [];
+	for (const world of WORLDS) {
+		if (!isWorldUnlocked(world, progress.prestigeLevel ?? 0)) {
+			continue;
+		}
+		for (const producer of world.producers) {
+			if (progress.producers[producer.id] > 0) {
+				ownedIds.push(world.id);
+				break;
+			}
+		}
+	}
+	return ownedIds;
+};
+
 export const calculateProductionCps = (
 	progress: AchievementProgress
 ): number => {
 	let producerCps = 0;
-	for (const producer of PRODUCERS) {
-		producerCps +=
-			producer.baseCps *
-			progress.producers[producer.id] *
-			producerMultiplier(progress, producer.id);
+	const ownedWorldIds = ownedWorldIdsInRun(progress);
+	for (const world of WORLDS) {
+		if (!isWorldUnlocked(world, progress.prestigeLevel ?? 0)) {
+			continue;
+		}
+		let worldCps = 0;
+		for (const producer of world.producers) {
+			worldCps +=
+				producer.baseCps *
+				progress.producers[producer.id] *
+				producerMultiplier(progress, producer.id);
+		}
+		producerCps += worldCps * crossWorldMultiplier(world.id, ownedWorldIds);
 	}
 	producerCps *= 2 ** countRunUpgradesOfKind(progress, "flavor");
 	producerCps *= 1 + progress.goldenUpgrades["endless-chill"] * 0.15;
