@@ -63,6 +63,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { SeasonBanner, SeasonPanel } from "@/components/season-panel";
 import {
 	bucketCans,
 	bucketCps,
@@ -1894,6 +1895,7 @@ export const MonsterGame = () => {
 				isFrenzyActive && "is-frenzy"
 			)}
 		>
+			<SeasonBanner />
 			<StatsCard
 				clicksPerSecond={clicksPerSecond}
 				game={game}
@@ -1922,6 +1924,10 @@ export const MonsterGame = () => {
 			/>
 			<LeaderboardCard
 				entries={leaderboardQuery.data ?? []}
+				isAnonymous={Boolean(session.user.isAnonymous)}
+				viewerId={session.user.id}
+			/>
+			<SeasonPanel
 				isAnonymous={Boolean(session.user.isAnonymous)}
 				viewerId={session.user.id}
 			/>
