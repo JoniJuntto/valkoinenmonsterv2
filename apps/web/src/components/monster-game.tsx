@@ -2,6 +2,11 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
+	ASCENSION_NODES,
+	type AscensionNodeId,
+	activeFrenzyMultiplier,
+	ascensionNodeCost,
+	ascensionNodeUnlocked,
 	bestStockerPurchase,
 	CAN_VARIANTS,
 	CLICK_RUSH_MULTIPLIER,
@@ -16,13 +21,14 @@ import {
 	countUnlockedAchievements,
 	formatGameNumber,
 	frenzyDurationMs,
-	frenzyMultiplier,
 	type GameSnapshot,
 	GOLDEN_CAN_BASE,
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
 	goldenUpgradeCost,
+	goldenUpgradeUnlockLevel,
 	isGoldenUpgradeId,
+	MAX_FRENZY_STACKS,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
 	PRODUCER_SYNERGIES,
@@ -130,12 +136,14 @@ type MutationActionName =
 	| "sync"
 	| "buy_producer"
 	| "buy_upgrade"
+	| "buy_ascension_node"
 	| "claim_golden_rush"
 	| "trigger_frenzy"
 	| "prestige";
 
 interface MutationOptions {
 	action: MutationActionName;
+	nodeId?: string;
 	producerId?: ProducerId;
 	producerQuantity?: number;
 	producerSource?: "manual" | "smart_stocker";
@@ -202,6 +210,20 @@ const trackMutationSuccess = (
 					upgrade_id: options.upgradeId,
 				});
 			}
+			break;
+		}
+		case "buy_ascension_node": {
+			if (!options.nodeId) {
+				break;
+			}
+			const nodeId = options.nodeId as AscensionNodeId;
+			const rank = projected.ascensionNodes[nodeId] ?? 0;
+			track(AnalyticsEvents.game.purchaseAscensionNode, {
+				cost_sparks: ascensionNodeCost(nodeId, Math.max(0, rank - 1)),
+				node_id: options.nodeId,
+				rank_after: rank,
+				total_sparks: projected.totalAscensionSparks,
+			});
 			break;
 		}
 		case "prestige": {
@@ -334,6 +356,10 @@ const NUTRITION_ROWS: {
 	{ label: "Prestige level", value: (game) => String(game.prestigeLevel) },
 	{ label: "Golden cans", value: (game) => formatGameNumber(game.goldenCans) },
 	{
+		label: "Ascension sparks",
+		value: (game) => String(Math.floor(game.ascensionSparks)),
+	},
+	{
 		label: "Caffeine level",
 		value: (game) => `+${countUnlockedAchievements(game)}%`,
 	},
@@ -347,7 +373,9 @@ const StatsCard = ({
 }: StatsCardProps) => {
 	const clickValue =
 		calculateClickValue(game) *
-		((game.frenzyEndsAt ?? 0) > game.serverNow ? frenzyMultiplier(game) : 1) *
+		((game.frenzyEndsAt ?? 0) > game.serverNow
+			? activeFrenzyMultiplier(game, game.frenzyStacks)
+			: 1) *
 		clickBuffMultiplier(game, game.serverNow);
 	const reward = prestigeReward(game.lifetimeCans, game.totalGoldenCans);
 	const nextRequirement = nextGoldenCanRequirement(game.totalGoldenCans);
@@ -473,7 +501,7 @@ const CanCard = ({
 				<div>
 					<CardTitle className="font-display text-3xl uppercase leading-none tracking-wide">
 						{isFrenzyActive
-							? `Frenzy ×${frenzyMultiplier(game)}`
+							? `Frenzy ×${activeFrenzyMultiplier(game, game.frenzyStacks)}`
 							: "Crack a can"}
 					</CardTitle>
 					{isBuffActive ? (
@@ -556,6 +584,7 @@ interface ShopCardProps {
 	game: GameSnapshot;
 	isSaving: boolean;
 	isSmartStockerEnabled: boolean;
+	onBuyAscensionNode: (nodeId: string) => void;
 	onBuyProducer: (producerId: ProducerId) => void;
 	onBuyUpgrade: (upgradeId: string) => void;
 	onChangeBuyQuantity: (quantity: BuyQuantity) => void;
@@ -567,6 +596,7 @@ const ShopCard = ({
 	game,
 	isSaving,
 	isSmartStockerEnabled,
+	onBuyAscensionNode,
 	onBuyProducer,
 	onBuyUpgrade,
 	onChangeBuyQuantity,
@@ -600,6 +630,17 @@ const ShopCard = ({
 			}
 		},
 		[onBuyUpgrade]
+	);
+
+	const handleAscensionClick = useCallback(
+		(event: MouseEvent<HTMLButtonElement>) => {
+			const { dataset } = event.currentTarget;
+			const { ascensionId } = dataset;
+			if (ascensionId) {
+				onBuyAscensionNode(ascensionId);
+			}
+		},
+		[onBuyAscensionNode]
 	);
 
 	return (
@@ -750,7 +791,11 @@ const ShopCard = ({
 						{GOLDEN_UPGRADES.map((upgrade) => {
 							const rank = game.goldenUpgrades[upgrade.id];
 							const cost = goldenUpgradeCost(upgrade.id, rank);
-							const isUnlocked = game.prestigeLevel >= upgrade.unlockLevel;
+							const unlockLevel = goldenUpgradeUnlockLevel(
+								upgrade,
+								game.ascensionNodes
+							);
+							const isUnlocked = game.prestigeLevel >= unlockLevel;
 							const isMaxed = rank >= upgrade.maxRank;
 							return (
 								<li
@@ -762,7 +807,7 @@ const ShopCard = ({
 										<p className="text-muted-foreground">
 											{isUnlocked
 												? upgrade.description
-												: `Unlocks at prestige ${upgrade.unlockLevel}`}
+												: `Unlocks at prestige ${unlockLevel}`}
 										</p>
 										<p className="text-muted-foreground">
 											Rank {rank}/{upgrade.maxRank}
@@ -782,6 +827,73 @@ const ShopCard = ({
 										variant="secondary"
 									>
 										{isMaxed ? "Max" : `${formatGameNumber(cost)} golden`}
+									</Button>
+								</li>
+							);
+						})}
+					</ul>
+				</section>
+
+				<section className="flex flex-col gap-2">
+					<div className="flex items-center justify-between gap-2">
+						<h2 className="font-display text-base uppercase tracking-wide">
+							Ascension
+						</h2>
+						<span className="text-monster-gold tabular-nums">
+							{Math.floor(game.ascensionSparks)} ⚡
+						</span>
+					</div>
+					<p className="text-muted-foreground">
+						Permanent tree nodes. Sparks are earned on prestige and never reset.
+					</p>
+					<ul className="flex flex-col gap-2">
+						{ASCENSION_NODES.map((node) => {
+							const nodeId = node.id as AscensionNodeId;
+							const rank = game.ascensionNodes[nodeId] ?? 0;
+							const cost = ascensionNodeCost(nodeId, rank);
+							const isMaxed = rank >= node.maxRank;
+							const isUnlocked = ascensionNodeUnlocked(
+								game.ascensionNodes,
+								node
+							);
+							const requiredNode = node.requiredNode
+								? ASCENSION_NODES.find(
+										(entry) => entry.id === node.requiredNode
+									)
+								: undefined;
+							return (
+								<li
+									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+									key={node.id}
+								>
+									<div>
+										<h3 className="font-medium">
+											{node.name}
+											{rank > 0 ? ` · Rank ${rank}/${node.maxRank}` : ""}
+										</h3>
+										<p className="text-muted-foreground">
+											{isUnlocked
+												? node.description
+												: `Requires ${requiredNode?.name ?? node.requiredNode} rank ${node.requiredRank ?? 1}`}
+										</p>
+									</div>
+									<Button
+										data-ascension-id={node.id}
+										disabled={
+											isSaving ||
+											!isUnlocked ||
+											isMaxed ||
+											game.ascensionSparks < cost
+										}
+										onClick={handleAscensionClick}
+										size="sm"
+										variant={
+											isUnlocked && !isMaxed && game.ascensionSparks >= cost
+												? "default"
+												: "outline"
+										}
+									>
+										{isMaxed ? "Max" : `${cost} ⚡`}
 									</Button>
 								</li>
 							);
@@ -1119,6 +1231,9 @@ export const MonsterGame = () => {
 	);
 	const { mutateAsync: buyUpgradeMutation } = useMutation(
 		trpc.game.buyUpgrade.mutationOptions()
+	);
+	const { mutateAsync: buyAscensionNodeMutation } = useMutation(
+		trpc.game.buyAscensionNode.mutationOptions()
 	);
 	const { mutateAsync: triggerFrenzyMutation } = useMutation(
 		trpc.game.triggerFrenzy.mutationOptions()
@@ -1499,6 +1614,18 @@ export const MonsterGame = () => {
 		[buyUpgradeMutation, performMutation]
 	);
 
+	const buyAscensionNodeNow = useCallback(
+		(nodeId: string) =>
+			performMutation(
+				(input) => buyAscensionNodeMutation({ ...input, nodeId }),
+				{
+					action: "buy_ascension_node",
+					nodeId,
+				}
+			),
+		[buyAscensionNodeMutation, performMutation]
+	);
+
 	const triggerFrenzyNow = useCallback(
 		() =>
 			performMutation((input) => triggerFrenzyMutation(input), {
@@ -1607,7 +1734,9 @@ export const MonsterGame = () => {
 		const frenzyActive = (current.frenzyEndsAt ?? 0) > now;
 		const amount =
 			calculateClickValue(current) *
-			(frenzyActive ? frenzyMultiplier(current) : 1) *
+			(frenzyActive
+				? activeFrenzyMultiplier(current, current.frenzyStacks)
+				: 1) *
 			clickBuffMultiplier(current, now);
 		if (milestone) {
 			track(AnalyticsEvents.game.clickMilestone, {
@@ -1617,11 +1746,18 @@ export const MonsterGame = () => {
 				prestige_level: current.prestigeLevel,
 			});
 		}
-		const triggersFrenzy = !frenzyActive && current.nextFrenzyClick <= 1;
+		const canStackFrenzy =
+			frenzyActive &&
+			current.ascensionNodes["frenzy-stacking"] > 0 &&
+			current.frenzyStacks < MAX_FRENZY_STACKS;
+		const triggersFrenzy =
+			(!frenzyActive && current.nextFrenzyClick <= 1) ||
+			(canStackFrenzy && current.nextFrenzyClick <= 1);
 		updateGame((state) => {
-			const nextFrenzyClick = frenzyActive
-				? state.nextFrenzyClick
-				: Math.max(0, state.nextFrenzyClick - 1);
+			const nextFrenzyClick =
+				frenzyActive && !canStackFrenzy
+					? state.nextFrenzyClick
+					: Math.max(0, state.nextFrenzyClick - 1);
 			return {
 				...state,
 				bestRunCans: clampGameValue(
@@ -1629,8 +1765,15 @@ export const MonsterGame = () => {
 				),
 				cans: clampGameValue(state.cans + amount),
 				frenzyEndsAt: triggersFrenzy
-					? now + frenzyDurationMs(state)
+					? canStackFrenzy
+						? (state.frenzyEndsAt ?? now) + frenzyDurationMs(state)
+						: now + frenzyDurationMs(state)
 					: state.frenzyEndsAt,
+				frenzyStacks: triggersFrenzy
+					? canStackFrenzy
+						? state.frenzyStacks + 1
+						: 1
+					: state.frenzyStacks,
 				lifetimeCans: clampGameValue(state.lifetimeCans + amount),
 				nextFrenzyClick,
 				runCans: clampGameValue(state.runCans + amount),
@@ -1707,6 +1850,12 @@ export const MonsterGame = () => {
 		},
 		[buyUpgradeNow]
 	);
+	const handleBuyAscensionNode = useCallback(
+		(nodeId: string) => {
+			buyAscensionNodeNow(nodeId).catch(() => undefined);
+		},
+		[buyAscensionNodeNow]
+	);
 	const handleClaimGoldenRush = useCallback(() => {
 		claimGoldenRushNow().catch(() => undefined);
 	}, [claimGoldenRushNow]);
@@ -1745,6 +1894,7 @@ export const MonsterGame = () => {
 				game={game}
 				isSaving={isSaving}
 				isSmartStockerEnabled={isSmartStockerEnabled}
+				onBuyAscensionNode={handleBuyAscensionNode}
 				onBuyProducer={handleBuyProducer}
 				onBuyUpgrade={handleBuyUpgrade}
 				onChangeBuyQuantity={changeBuyQuantity}

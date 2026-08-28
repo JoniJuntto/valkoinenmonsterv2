@@ -12,7 +12,15 @@ import {
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
+	ASCENSION_NODES,
+	ASCENSION_WIND_SECONDS,
+	type AscensionNodeId,
 	acceptManualClicks,
+	activeFrenzyMultiplier,
+	ascensionNodeCost,
+	ascensionNodeUnlocked,
+	ascensionPotential,
+	ascensionReward,
 	bestStockerPurchase,
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
@@ -22,20 +30,26 @@ import {
 	clampGameValue,
 	collectUnlockedVariants,
 	createHeadStartProducers,
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	createStartingRunUpgrades,
+	FRENZY_STACK_BONUS,
 	frenzyDurationMs,
-	frenzyMultiplier,
 	type GameProgress,
 	type GameSnapshot,
 	GOLDEN_RUSH_CLAIM_WINDOW_MS,
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
+	getAscensionNode,
 	getGoldenUpgrade,
 	getRunUpgrade,
 	goldenUpgradeCost,
+	goldenUpgradeUnlockLevel,
+	isAscensionNodeId,
 	isGoldenUpgradeId,
 	isProducerId,
+	MAX_FRENZY_STACKS,
 	nextGoldenCanRequirement,
 	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
@@ -96,6 +110,13 @@ export const agentGameCommandSchema = z.discriminatedUnion("action", [
 		.strict(),
 	z
 		.object({
+			action: z.literal("buy_ascension_node"),
+			nodeId: z.string(),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
 			action: z.literal("wait"),
 			milliseconds: z.number().int().min(1).max(MAX_AGENT_WAIT_MS),
 			...agentOperationId,
@@ -133,12 +154,16 @@ export const createDefaultGameState = (
 		totalGoldenCans: 0,
 	};
 	return {
+		ascensionNodes: createInitialAscensionNodes(),
+		ascensionSparks: 0,
 		bestRunCans: 0,
 		cans: 0,
+		frenzyStacks: 0,
 		goldenCans: 0,
 		lifetimeCans: 0,
 		prestigeLevel: 0,
 		runCans: 0,
+		totalAscensionSparks: 0,
 		userId,
 		...progress,
 		createdAt: now,
@@ -221,13 +246,15 @@ const accrueStateWithResult = (
 		elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS
 			? offlineProductionMultiplier(state)
 			: 1;
+	const frenzyBoost = state.frenzyStacks > 1 ? FRENZY_STACK_BONUS : 1;
 	const idleGain = calculateIdleGain(
 		state,
 		elapsedMs,
 		frenzyIdleMs,
 		offlineMultiplier,
 		productionBuffMs,
-		PRODUCTION_FRENZY_MULTIPLIER
+		PRODUCTION_FRENZY_MULTIPLIER,
+		frenzyBoost
 	);
 	const isFrenzyActive = frenzyEndMs > nowMs;
 	const isClickRushActive =
@@ -235,17 +262,31 @@ const accrueStateWithResult = (
 	const clickGain =
 		acceptedClicks *
 		calculateClickValue(state) *
-		(isFrenzyActive ? frenzyMultiplier(state) : 1) *
+		(isFrenzyActive ? activeFrenzyMultiplier(state, state.frenzyStacks) : 1) *
 		(isClickRushActive ? CLICK_RUSH_MULTIPLIER : 1);
 	let nextState = addCans(state, idleGain + clickGain);
 	let { nextFrenzyClick } = state;
 	let frenzyEndsAt =
 		state.frenzyEndsAt && frenzyEndMs > nowMs ? state.frenzyEndsAt : null;
+	let frenzyStacks = frenzyEndMs > nowMs ? state.frenzyStacks : 0;
+	const canStackFrenzy = state.ascensionNodes["frenzy-stacking"] > 0;
 
-	if (!isFrenzyActive && acceptedClicks >= nextFrenzyClick) {
-		frenzyEndsAt = new Date(nowMs + frenzyDurationMs(state));
-		nextFrenzyClick = randomFrenzyThreshold(nextState, secureRandom());
-	} else if (!isFrenzyActive) {
+	if (acceptedClicks >= nextFrenzyClick) {
+		if (isFrenzyActive) {
+			if (canStackFrenzy && frenzyStacks < MAX_FRENZY_STACKS) {
+				frenzyEndsAt = new Date(frenzyEndMs + frenzyDurationMs(state));
+				frenzyStacks += 1;
+				nextFrenzyClick = randomFrenzyThreshold(nextState, secureRandom());
+			}
+		} else {
+			frenzyEndsAt = new Date(nowMs + frenzyDurationMs(state));
+			frenzyStacks = 1;
+			nextFrenzyClick = randomFrenzyThreshold(nextState, secureRandom());
+		}
+	} else if (
+		!isFrenzyActive ||
+		(canStackFrenzy && frenzyStacks < MAX_FRENZY_STACKS)
+	) {
 		nextFrenzyClick -= acceptedClicks;
 	}
 
@@ -262,6 +303,7 @@ const accrueStateWithResult = (
 	nextState = {
 		...nextState,
 		frenzyEndsAt,
+		frenzyStacks,
 		goldenRushBuffEndsAt,
 		goldenRushBuffKind,
 		goldenRushReadyAt,
@@ -284,10 +326,13 @@ const toSnapshot = (
 	isAnonymous: boolean,
 	serverNow: number
 ): GameSnapshot => ({
+	ascensionNodes: state.ascensionNodes,
+	ascensionSparks: state.ascensionSparks,
 	bestRunCans: state.bestRunCans,
 	cans: state.cans,
 	collection: state.collection,
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
+	frenzyStacks: state.frenzyStacks,
 	goldenCans: state.goldenCans,
 	goldenRushBuffEndsAt: state.goldenRushBuffEndsAt?.getTime() ?? null,
 	goldenRushBuffKind: state.goldenRushBuffKind,
@@ -305,6 +350,7 @@ const toSnapshot = (
 	runCans: state.runCans,
 	runUpgrades: state.runUpgrades,
 	serverNow,
+	totalAscensionSparks: state.totalAscensionSparks,
 	totalGoldenCans: state.totalGoldenCans,
 	unlockedAchievements: state.unlockedAchievements,
 });
@@ -554,7 +600,8 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 			}
 			const rank = state.goldenUpgrades[upgradeId];
 			if (
-				state.prestigeLevel < upgrade.unlockLevel ||
+				state.prestigeLevel <
+					goldenUpgradeUnlockLevel(upgrade, state.ascensionNodes) ||
 				rank >= upgrade.maxRank
 			) {
 				throw new TRPCError({
@@ -605,6 +652,49 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 	};
 };
 
+export const buyAscensionNode = (nodeId: string): GameMutation => {
+	if (!isAscensionNodeId(nodeId)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Unknown ascension node",
+		});
+	}
+	return (state) => {
+		const node = getAscensionNode(nodeId);
+		if (!node) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Unknown ascension node",
+			});
+		}
+		const rank = state.ascensionNodes[nodeId] ?? 0;
+		if (rank >= node.maxRank) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Ascension node is maxed",
+			});
+		}
+		if (!ascensionNodeUnlocked(state.ascensionNodes, node)) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Ascension node is locked",
+			});
+		}
+		const cost = ascensionNodeCost(nodeId, rank);
+		if (state.ascensionSparks < cost) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "Not enough ascension sparks",
+			});
+		}
+		return {
+			...state,
+			ascensionNodes: { ...state.ascensionNodes, [nodeId]: rank + 1 },
+			ascensionSparks: state.ascensionSparks - cost,
+		};
+	};
+};
+
 export const claimGoldenRush =
 	(
 		randomValue: number,
@@ -648,9 +738,11 @@ export const claimGoldenRush =
 		if (reward.kind === "lucky") {
 			return { ...addCans(collected, reward.cans), goldenRushReadyAt };
 		}
+		const buffDurationMs =
+			reward.durationMs * (state.ascensionNodes["golden-echo"] > 0 ? 2 : 1);
 		return {
 			...collected,
-			goldenRushBuffEndsAt: new Date(nowMs + reward.durationMs),
+			goldenRushBuffEndsAt: new Date(nowMs + buffDurationMs),
 			goldenRushBuffKind: reward.kind,
 			goldenRushReadyAt,
 		};
@@ -668,20 +760,36 @@ export const prestige: GameMutation = (state) => {
 		collection: state.collection,
 		goldenUpgrades: state.goldenUpgrades,
 		producers: createHeadStartProducers(state.goldenUpgrades),
-		runUpgrades: [],
-		totalGoldenCans: state.totalGoldenCans + reward,
+		runUpgrades: createStartingRunUpgrades(state.ascensionNodes),
+		totalGoldenCans: clampGameCounter(state.totalGoldenCans + reward),
 	};
-	return {
+	const sparkGain = ascensionReward(
+		nextProgress.totalGoldenCans,
+		state.totalAscensionSparks
+	);
+	let nextState: MutableGameState = {
 		...state,
 		...nextProgress,
+		ascensionSparks: clampGameCounter(state.ascensionSparks + sparkGain),
 		bestRunCans: Math.max(state.bestRunCans, state.runCans),
 		cans: 0,
 		frenzyEndsAt: null,
+		frenzyStacks: 0,
 		goldenCans: clampGameCounter(state.goldenCans + reward),
 		nextFrenzyClick: randomFrenzyThreshold(nextProgress, secureRandom()),
 		prestigeLevel: clampGameCounter(state.prestigeLevel + 1),
 		runCans: 0,
+		totalAscensionSparks: clampGameCounter(
+			state.totalAscensionSparks + sparkGain
+		),
 	};
+	if (state.ascensionNodes["second-wind"] > 0) {
+		nextState = addCans(
+			nextState,
+			calculateCps(state) * ASCENSION_WIND_SECONDS
+		);
+	}
+	return nextState;
 };
 
 export const resetGameState = (
@@ -699,6 +807,16 @@ const sessionIsAnonymous = (session: {
 }): boolean => Boolean(session.user.isAnonymous);
 
 export const gameRouter = router({
+	buyAscensionNode: protectedProcedure
+		.input(mutationInput.extend({ nodeId: z.string() }))
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				buyAscensionNode(input.nodeId)
+			)
+		),
 	buyProducer: protectedProcedure
 		.input(
 			mutationInput.extend({
@@ -770,6 +888,10 @@ export const gameRouter = router({
 			trackServerEvent(
 				"game.prestige.completed",
 				{
+					ascension_sparks_gained: Math.max(
+						0,
+						snapshot.ascensionSparks - before.ascensionSparks
+					),
 					prestige_level_before: before.prestigeLevel,
 					requirement,
 					reward_golden_cans: reward,
@@ -875,6 +997,7 @@ export interface AgentGameActionResult {
 	acceptedClicks?: number;
 	action: AgentGameCommand["action"];
 	advancedMilliseconds?: number;
+	nodeId?: string;
 	producerId?: string;
 	rejectedClicks?: number;
 	replayed: boolean;
@@ -929,7 +1052,8 @@ export const createAgentGameObservation = (
 		const rank = state.goldenUpgrades[upgrade.id];
 		const cost = goldenUpgradeCost(upgrade.id, rank);
 		const maxed = rank >= upgrade.maxRank;
-		const unlocked = state.prestigeLevel >= upgrade.unlockLevel;
+		const unlockLevel = goldenUpgradeUnlockLevel(upgrade, state.ascensionNodes);
+		const unlocked = state.prestigeLevel >= unlockLevel;
 		return {
 			affordable: !maxed && unlocked && state.goldenCans >= cost,
 			cost,
@@ -940,7 +1064,24 @@ export const createAgentGameObservation = (
 			name: upgrade.name,
 			rank,
 			unlocked,
-			unlockLevel: upgrade.unlockLevel,
+			unlockLevel,
+		};
+	});
+	const ascensionNodes = ASCENSION_NODES.map((node) => {
+		const rank = state.ascensionNodes[node.id as AscensionNodeId] ?? 0;
+		const cost = ascensionNodeCost(node.id as AscensionNodeId, rank);
+		const maxed = rank >= node.maxRank;
+		const unlocked = ascensionNodeUnlocked(state.ascensionNodes, node);
+		return {
+			affordable: !maxed && unlocked && state.ascensionSparks >= cost,
+			cost,
+			description: node.description,
+			id: node.id,
+			maxed,
+			maxRank: node.maxRank,
+			name: node.name,
+			rank,
+			unlocked,
 		};
 	});
 	const legalActions: AgentGameCommand[] = [{ action: "observe" }];
@@ -974,6 +1115,15 @@ export const createAgentGameObservation = (
 			});
 		}
 	}
+	for (const node of ascensionNodes) {
+		if (node.affordable) {
+			legalActions.push({
+				action: "buy_ascension_node",
+				nodeId: node.id,
+				operationId: crypto.randomUUID(),
+			});
+		}
+	}
 	if (reward > 0) {
 		legalActions.push({
 			action: "prestige",
@@ -990,20 +1140,28 @@ export const createAgentGameObservation = (
 		leaderboard: leaderboard.slice(0, 10),
 		legalActions,
 		result,
-		shop: { goldenUpgrades, producers, runUpgrades },
+		shop: { ascensionNodes, goldenUpgrades, producers, runUpgrades },
 		state: snapshot,
 		stats: {
+			ascension: {
+				potential: ascensionPotential(state.totalGoldenCans),
+				sparks: state.ascensionSparks,
+			},
 			baseClickValue: clickValue,
 			cansPerSecond: calculateCps(state),
 			effectiveClickValue:
-				clickValue * (frenzyActive ? frenzyMultiplier(state) : 1),
+				clickValue *
+				(frenzyActive ? activeFrenzyMultiplier(state, state.frenzyStacks) : 1),
 			frenzy: {
 				active: frenzyActive,
 				clicksUntilNext: state.nextFrenzyClick,
-				multiplier: frenzyActive ? frenzyMultiplier(state) : 1,
+				multiplier: frenzyActive
+					? activeFrenzyMultiplier(state, state.frenzyStacks)
+					: 1,
 				remainingMilliseconds: frenzyActive
 					? Math.max(0, (snapshot.frenzyEndsAt ?? 0) - snapshot.serverNow)
 					: 0,
+				stacks: state.frenzyStacks,
 			},
 			manualClicksAvailable,
 			prestige: {
@@ -1021,6 +1179,9 @@ const mutationForAgentCommand = (command: AgentGameCommand): GameMutation => {
 	}
 	if (command.action === "buy_upgrade") {
 		return buyUpgrade(command.upgradeId);
+	}
+	if (command.action === "buy_ascension_node") {
+		return buyAscensionNode(command.nodeId);
 	}
 	if (command.action === "wait") {
 		return (state, now) => advanceOpenState(state, command.milliseconds, now);
@@ -1062,6 +1223,9 @@ const resultForAgentCommand = (
 	}
 	if (command.action === "buy_upgrade") {
 		return { ...base, upgradeId: command.upgradeId };
+	}
+	if (command.action === "buy_ascension_node") {
+		return { ...base, nodeId: command.nodeId };
 	}
 	return base;
 };
