@@ -50,8 +50,8 @@ import {
 	rollGoldenRushDelayMs,
 	rollGoldenRushDrop,
 	rollGoldenRushReward,
-	unlockedAchievementIds,
 	unionCollection,
+	unlockedAchievementIds,
 } from "../game";
 import {
 	assertProgressionInvariants,
@@ -351,8 +351,8 @@ export const mutateGameStateWithState = async (
 	// action.
 	const mutated = {
 		...applied,
-		unlockedAchievements: unlockedAchievementIds(applied),
 		collection: collectUnlockedVariants(applied),
+		unlockedAchievements: unlockedAchievementIds(applied),
 	};
 	assertProgressionInvariants(mutated, now);
 	const [saved] = await database

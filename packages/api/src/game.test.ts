@@ -9,7 +9,6 @@ import {
 	calculateCps,
 	calculateIdleGain,
 	calculateProductionCps,
-	cheapestAffordableProducer,
 	clampGameValue,
 	collectionMultiplier,
 	collectUnlockedVariants,
@@ -47,8 +46,8 @@ import {
 	rollGoldenRushDelayMs,
 	rollGoldenRushDrop,
 	rollGoldenRushReward,
-	unlockedAchievementIds,
 	unionCollection,
+	unlockedAchievementIds,
 } from "./game";
 
 const createProgress = (): GameProgress => ({
