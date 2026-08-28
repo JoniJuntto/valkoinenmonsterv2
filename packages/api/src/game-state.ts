@@ -6,6 +6,8 @@ import {
 	type AscensionNodeId,
 	type AscensionNodeRanks,
 	CLICK_RUSH_DURATION_MS,
+	type ContractRuntime,
+	type ContractState,
 	clampGameCounter,
 	clampGameValue,
 	countRunUpgradesOfKind,
@@ -25,6 +27,7 @@ import {
 	getRunUpgrade,
 	isAchievementId,
 	isCanVariantId,
+	getContract,
 	isDraftOnlyKind,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
@@ -40,9 +43,14 @@ import {
 
 export type MutableGameState = Omit<
 	GameStateRow,
-	"producers" | "goldenUpgrades" | "goldenRushBuffKind" | "ascensionNodes"
+	"producers"
+	| "goldenUpgrades"
+	| "goldenRushBuffKind"
+	| "ascensionNodes"
+	| "contract"
 > &
-	GameProgress & {
+	GameProgress &
+	ContractState & {
 		ascensionNodes: AscensionNodeRanks;
 		goldenRushBuffKind: GoldenRushBuffKind | null;
 	};
@@ -156,6 +164,58 @@ const normalizeVentedWalls = (value: unknown): string[] => {
 	return prefix;
 };
 
+const finiteTimestamp = (value: unknown): number | null =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0
+		? Math.floor(value)
+		: null;
+
+const normalizeContract = (value: unknown): ContractRuntime | null => {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return null;
+	}
+	const stored = value as Record<string, unknown>;
+	const id = typeof stored.id === "string" ? stored.id : "";
+	if (!getContract(id)) {
+		return null;
+	}
+	const status =
+		stored.status === "active" || stored.status === "offered"
+			? stored.status
+			: null;
+	if (!status) {
+		return null;
+	}
+	const expiresAt = finiteTimestamp(stored.expiresAt);
+	const startedAt = finiteTimestamp(stored.startedAt);
+	if (status === "active" && (expiresAt === null || startedAt === null)) {
+		return null;
+	}
+	const count = (input: unknown): number => finiteTimestamp(input) ?? 0;
+	return {
+		baselinePrestige: count(stored.baselinePrestige),
+		baselineRunCans: count(stored.baselineRunCans),
+		expiresAt,
+		frenzyClicks: count(stored.frenzyClicks),
+		id,
+		startedAt,
+		status,
+	};
+};
+
+const normalizeCompletedContracts = (value: unknown): string[] => {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return [
+		...new Set(
+			value.filter(
+				(id): id is string =>
+					typeof id === "string" && getContract(id) !== undefined
+			)
+		),
+	];
+};
+
 export const normalizeCanBalances = (state: GameStateRow) => {
 	const cans = clampGameValue(state.cans);
 	const runCans = Math.max(cans, clampGameValue(state.runCans));
@@ -239,6 +299,9 @@ export const normalizePersistedGameState = (
 		bestRunCans,
 		cans,
 		collection: normalizeCollection(state.collection),
+		completedContracts: normalizeCompletedContracts(state.completedContracts),
+		contract: normalizeContract(state.contract),
+		contractCompletions: clampGameCounter(state.contractCompletions),
 		coolant: clampGameValue(state.coolant),
 		coolantTowers: clampGameCounter(state.coolantTowers),
 		draftTier,
@@ -405,6 +468,30 @@ export const assertProgressionInvariants = (
 			state.collection.every(isCanVariantId),
 		"collection variants must be known and unique"
 	);
+	invariant(
+		state.completedContracts.every((id) => getContract(id) !== undefined) &&
+			state.completedContracts.length ===
+				new Set(state.completedContracts).size,
+		"completed contracts must be known and unique"
+	);
+	invariant(
+		Number.isInteger(state.contractCompletions) &&
+			state.contractCompletions >= 0 &&
+			state.contractCompletions <= MAX_PERSISTED_COUNTER,
+		"contract completions must be a valid counter"
+	);
+	if (state.contract !== null) {
+		invariant(
+			getContract(state.contract.id) !== undefined &&
+				(state.contract.status === "active" ||
+					state.contract.status === "offered") &&
+				Number.isInteger(state.contract.frenzyClicks) &&
+				state.contract.frenzyClicks >= 0 &&
+				(state.contract.expiresAt === null ||
+					Number.isFinite(state.contract.expiresAt)),
+			"contract runtime must be well-formed"
+		);
+	}
 	invariant(
 		Number.isFinite(state.manualClickBudget) &&
 			state.manualClickBudget >= 0 &&

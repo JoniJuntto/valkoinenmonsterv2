@@ -8,6 +8,8 @@ import {
 	frenzyDurationMs,
 	GOLDEN_RUSH_CLAIM_WINDOW_MS,
 	GOLDEN_RUSH_DROP_CHANCE,
+	getContract,
+	offerContract,
 	producerBulkCost,
 } from "../game";
 
@@ -17,6 +19,8 @@ process.env.CORS_ORIGIN = "http://localhost:3001";
 process.env.DATABASE_URL = "postgres://test:test@localhost:5432/test";
 
 const {
+	abandonContract,
+	acceptContract,
 	accrueState,
 	advanceOpenState,
 	agentGameCommandSchema,
@@ -482,6 +486,38 @@ describe("server-authoritative mutations", () => {
 			buyAscensionNode("second-nature")(second, new Date(0))
 		).toThrow("Ascension node is maxed");
 	});
+
+	test("accepting a contract arms its timer; abandoning clears it", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		expect(() => acceptContract(state, new Date(0))).toThrow(TRPCError);
+		const offer = offerContract(0, [], [], 0);
+		expect(offer).not.toBeNull();
+		state.contract = offer;
+		const accepted = acceptContract(state, new Date(60_000));
+		expect(accepted.contract?.status).toBe("active");
+		expect(accepted.contract?.startedAt).toBe(60_000);
+		expect(accepted.contract?.baselineRunCans).toBe(0);
+		const contractId = accepted.contract?.id ?? "";
+		expect(accepted.contract?.expiresAt).toBe(
+			60_000 + (getContract(contractId)?.durationMs ?? 0)
+		);
+		expect(() => acceptContract(accepted, new Date(61_000))).toThrow(TRPCError);
+		const abandoned = abandonContract(accepted, new Date(61_000));
+		expect(abandoned.contract).toBeNull();
+		expect(() => abandonContract(abandoned, new Date(62_000))).toThrow(
+			TRPCError
+		);
+	});
+
+	test("prestige resets the per-run contract pool", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.prestigeLevel = 1;
+		state.totalGoldenCans = 2;
+		state.completedContracts = ["warmup-chug"];
+		state.lifetimeCans = 9_000_000;
+		const reset = prestige(state, new Date(0));
+		expect(reset.completedContracts).toEqual([]);
+	});
 });
 
 describe("server accrual and leaderboard", () => {
@@ -712,6 +748,8 @@ describe("JSON agent game mode", () => {
 			bestRunCans: state.bestRunCans,
 			cans: state.cans,
 			collection: state.collection,
+			contract: null,
+			contractCompletions: 0,
 			coolant: state.coolant,
 			coolantTowers: state.coolantTowers,
 			draftTier: 0,

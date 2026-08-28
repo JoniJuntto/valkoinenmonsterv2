@@ -15,6 +15,7 @@ import {
 	COLLECTION_SETS,
 	COOLANT_PER_TOWER_PER_SEC,
 	type CollectionSetId,
+	type ContractSnapshot,
 	calculateClickValue,
 	calculateCps,
 	clampGameValue,
@@ -153,7 +154,9 @@ type MutationActionName =
 	| "buy_ascension_node"
 	| "claim_golden_rush"
 	| "trigger_frenzy"
-	| "prestige";
+	| "prestige"
+	| "accept_contract"
+	| "abandon_contract";
 
 interface MutationOptions {
 	action: MutationActionName;
@@ -292,6 +295,26 @@ const trackMutationSuccess = (
 				vent_cost: ventedWall.ventCost,
 				wall_id: ventedWall.id,
 			});
+			break;
+		}
+		case "accept_contract": {
+			track(AnalyticsEvents.game.contractAccepted, {
+				contract_id: projected.contract?.id ?? "",
+				prestige_level: projected.prestigeLevel,
+				run_cans_bucket: bucketCans(projected.runCans),
+			});
+			break;
+		}
+		case "abandon_contract": {
+			track(
+				before.contract?.status === "active"
+					? AnalyticsEvents.game.contractAbandoned
+					: AnalyticsEvents.game.contractSkipped,
+				{
+					contract_id: before.contract?.id ?? "",
+					progress: before.contract?.progress ?? 0,
+				}
+			);
 			break;
 		}
 		case "trigger_frenzy": {
@@ -1359,6 +1382,117 @@ interface GoldenRushCanProps {
 	onClaim: () => void;
 }
 
+interface ContractRewardTextProps {
+	reward: ContractSnapshot["reward"];
+}
+
+const ContractRewardText = ({ reward }: ContractRewardTextProps) => {
+	if (reward.runUpgradeName) {
+		return <>Unique upgrade: {reward.runUpgradeName}</>;
+	}
+	return <>{formatGameNumber(reward.goldenCans)} golden cans</>;
+};
+
+const formatContractTimeLeft = (
+	expiresAt: number,
+	serverNow: number
+): string => {
+	const totalSeconds = Math.max(0, Math.ceil((expiresAt - serverNow) / 1000));
+	const minutes = Math.floor(totalSeconds / 60);
+	return minutes > 0 ? `${minutes}m ${totalSeconds % 60}s` : `${totalSeconds}s`;
+};
+
+interface ContractsCardProps {
+	game: GameSnapshot;
+	isSaving: boolean;
+	onAbandon: () => void;
+	onAccept: () => void;
+}
+
+const ContractsCard = ({
+	game,
+	isSaving,
+	onAbandon,
+	onAccept,
+}: ContractsCardProps) => {
+	const contract = game.contract;
+	return (
+		<Card className="order-6 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Contracts
+				</CardTitle>
+				<CardDescription>
+					Timed challenges · {game.contractCompletions} completed · prestige
+					refreshes the pool
+				</CardDescription>
+			</CardHeader>
+			<CardContent>
+				{contract ? (
+					contract.status === "offered" ? (
+						<div className="flex flex-col gap-3">
+							<div>
+								<h3 className="font-medium">{contract.name}</h3>
+								<p>{contract.description}</p>
+								<p className="text-muted-foreground">
+									Reward: <ContractRewardText reward={contract.reward} />
+								</p>
+							</div>
+							<div className="flex gap-2">
+								<Button disabled={isSaving} onClick={onAccept}>
+									Accept
+								</Button>
+								<Button
+									disabled={isSaving}
+									onClick={onAbandon}
+									variant="outline"
+								>
+									Skip
+								</Button>
+							</div>
+						</div>
+					) : (
+						<div className="flex flex-col gap-3">
+							<div className="flex items-baseline justify-between gap-2">
+								<h3 className="font-medium">{contract.name}</h3>
+								<span className="tabular-nums">
+									{contract.expiresAt === null
+										? ""
+										: formatContractTimeLeft(
+												contract.expiresAt,
+												game.serverNow
+											)}
+								</span>
+							</div>
+							<p className="text-muted-foreground">{contract.description}</p>
+							<progress
+								aria-label={`Progress toward ${contract.name}`}
+								className="monster-progress w-full"
+								max={contract.target}
+								value={Math.min(contract.progress, contract.target)}
+							/>
+							<p className="tabular-nums">
+								{formatGameNumber(Math.min(contract.progress, contract.target))}{" "}
+								/ {formatGameNumber(contract.target)}
+							</p>
+							<p className="text-muted-foreground">
+								Reward: <ContractRewardText reward={contract.reward} />
+							</p>
+							<Button disabled={isSaving} onClick={onAbandon} variant="outline">
+								Give up
+							</Button>
+						</div>
+					)
+				) : (
+					<p className="text-muted-foreground">
+						Next contract offer is brewing…
+					</p>
+				)}
+			</CardContent>
+		</Card>
+	);
+};
+
 const GoldenRushCan = ({ game, onClaim }: GoldenRushCanProps) => {
 	const readyAt = game.goldenRushReadyAt;
 	if (!(readyAt !== null && isGoldenRushVisible(game))) {
@@ -1427,6 +1561,14 @@ export const MonsterGame = () => {
 	const lastIdleReportAtRef = useRef(0);
 	const prestigeReadyTrackedRef = useRef(false);
 	const wasFrenzyActiveRef = useRef(false);
+	const contractTrackerRef = useRef<{
+		completions: number;
+		expiresAt: number | null;
+		id: string | null;
+		name: string | null;
+		status: ContractSnapshot["status"] | null;
+	} | null>(null);
+	const contractAbandonedLocallyRef = useRef<string | null>(null);
 
 	const isAuthenticated = Boolean(sessionQuery.data);
 	const stateQuery = useQuery({
@@ -1477,6 +1619,12 @@ export const MonsterGame = () => {
 	);
 	const { mutateAsync: ventWallMutation } = useMutation(
 		trpc.game.ventWall.mutationOptions()
+	);
+	const { mutateAsync: acceptContractMutation } = useMutation(
+		trpc.game.acceptContract.mutationOptions()
+	);
+	const { mutateAsync: abandonContractMutation } = useMutation(
+		trpc.game.abandonContract.mutationOptions()
 	);
 
 	const updateGame = useCallback(
@@ -1770,6 +1918,47 @@ export const MonsterGame = () => {
 		wasFrenzyActiveRef.current = isFrenzyActive;
 	}, [game, isFrenzyActive]);
 
+	useEffect(() => {
+		if (!game) {
+			return;
+		}
+		const contract = game.contract;
+		const previous = contractTrackerRef.current;
+		contractTrackerRef.current = {
+			completions: game.contractCompletions,
+			expiresAt: contract?.expiresAt ?? null,
+			id: contract?.id ?? null,
+			name: contract?.name ?? null,
+			status: contract?.status ?? null,
+		};
+		if (!previous) {
+			return;
+		}
+		if (game.contractCompletions > previous.completions) {
+			toast.success(`Contract complete: ${previous.name ?? "Contract"}`);
+			track(AnalyticsEvents.game.contractCompleted, {
+				contract_id: previous.id ?? "",
+			});
+			return;
+		}
+		const wasAbandonedLocally =
+			contractAbandonedLocallyRef.current !== null &&
+			contractAbandonedLocallyRef.current === previous.id;
+		if (previous.status === "active" && previous.id && !wasAbandonedLocally) {
+			const expired =
+				previous.expiresAt !== null && game.serverNow > previous.expiresAt;
+			if (expired) {
+				toast.error(`Contract failed: ${previous.name ?? previous.id}`);
+				track(AnalyticsEvents.game.contractFailed, {
+					contract_id: previous.id ?? "",
+				});
+			}
+		}
+		if (wasAbandonedLocally) {
+			contractAbandonedLocallyRef.current = null;
+		}
+	}, [game]);
+
 	const performMutation = useCallback(
 		async (
 			action: MutationAction,
@@ -1930,6 +2119,22 @@ export const MonsterGame = () => {
 				action: "prestige",
 			}),
 		[performMutation, prestigeMutation]
+	);
+
+	const acceptContractNow = useCallback(
+		() =>
+			performMutation((input) => acceptContractMutation(input), {
+				action: "accept_contract",
+			}),
+		[acceptContractMutation, performMutation]
+	);
+
+	const abandonContractNow = useCallback(
+		() =>
+			performMutation((input) => abandonContractMutation(input), {
+				action: "abandon_contract",
+			}),
+		[abandonContractMutation, performMutation]
 	);
 
 	const claimGoldenRushNow = useCallback(async () => {
@@ -2160,6 +2365,16 @@ export const MonsterGame = () => {
 	const handleVentWall = useCallback(() => {
 		ventWallNow().catch(() => undefined);
 	}, [ventWallNow]);
+	const handleAcceptContract = useCallback(() => {
+		acceptContractNow().catch(() => undefined);
+	}, [acceptContractNow]);
+	const handleAbandonContract = useCallback(() => {
+		const { current } = gameRef;
+		if (current?.contract?.status === "active") {
+			contractAbandonedLocallyRef.current = current.contract.id;
+		}
+		abandonContractNow().catch(() => undefined);
+	}, [abandonContractNow]);
 
 	if (isSessionPending || !session || isStateLoading || !game) {
 		return <GameLoading />;
@@ -2219,6 +2434,12 @@ export const MonsterGame = () => {
 				onVentWall={handleVentWall}
 			/>
 			<CodexCard game={game} />
+			<ContractsCard
+				game={game}
+				isSaving={isSaving}
+				onAbandon={handleAbandonContract}
+				onAccept={handleAcceptContract}
+			/>
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>
 	);

@@ -603,6 +603,193 @@ export const rollDraftOptions = (
 	return [flavor.id, ...picked];
 };
 
+// ponytail: unbuyable upgrades granted only by contracts; registered in the
+// same lookup so grades/counters treat them like any run upgrade.
+export const CONTRACT_REWARD_UPGRADES: RunUpgradeDefinition[] = [
+	{
+		cost: 0,
+		description: "2× cans per click",
+		id: "golden-tab",
+		kind: "click",
+		name: "Golden Tab",
+	},
+	{
+		cost: 0,
+		description: "Double all production",
+		id: "baristas-secret",
+		kind: "flavor",
+		name: "Barista's Secret",
+	},
+	{
+		cost: 0,
+		description: "Clicks also earn +1% of your cans per second",
+		id: "momentum",
+		kind: "cps-click",
+		name: "Momentum",
+	},
+	{
+		cost: 0,
+		description: "Double all production",
+		id: "singularity-sip",
+		kind: "flavor",
+		name: "Singularity Sip",
+	},
+];
+
+export type ContractKind =
+	| "frenzy_clicks"
+	| "prestige"
+	| "prestige_producers"
+	| "run_cans";
+
+export type ContractStatus = "active" | "offered";
+
+export interface ContractRuntime {
+	baselinePrestige: number;
+	baselineRunCans: number;
+	expiresAt: number | null;
+	frenzyClicks: number;
+	id: string;
+	startedAt: number | null;
+	status: ContractStatus;
+}
+
+export interface ContractReward {
+	goldenCans: number;
+	runUpgradeId: string | null;
+	runUpgradeName: string | null;
+}
+
+export interface ContractSnapshot {
+	description: string;
+	expiresAt: number | null;
+	id: string;
+	kind: ContractKind;
+	name: string;
+	producerId: ProducerId | null;
+	progress: number;
+	reward: ContractReward;
+	startedAt: number | null;
+	status: ContractStatus;
+	target: number;
+}
+
+export interface ContractDefinition {
+	durationMs: number;
+	id: string;
+	kind: ContractKind;
+	minPrestige: number;
+	name: string;
+	producerId?: ProducerId;
+	reward: {
+		goldenCans?: number;
+		runUpgradeId?: (typeof CONTRACT_REWARD_UPGRADES)[number]["id"];
+	};
+	target: number;
+}
+
+export const CONTRACT_DURATION_UNITS_MS = 60_000;
+
+export const CONTRACTS: ContractDefinition[] = [
+	{
+		durationMs: 10 * CONTRACT_DURATION_UNITS_MS,
+		id: "warmup-chug",
+		kind: "run_cans",
+		minPrestige: 0,
+		name: "Warm-Up Chug",
+		reward: { goldenCans: 2 },
+		target: 100_000,
+	},
+	{
+		durationMs: 15 * CONTRACT_DURATION_UNITS_MS,
+		id: "tab-acrobat",
+		kind: "frenzy_clicks",
+		minPrestige: 0,
+		name: "Tab Acrobat",
+		reward: { runUpgradeId: "golden-tab" },
+		target: 200,
+	},
+	{
+		durationMs: 15 * CONTRACT_DURATION_UNITS_MS,
+		id: "stocking-spree",
+		kind: "prestige_producers",
+		minPrestige: 0,
+		name: "Stocking Spree",
+		reward: { goldenCans: 3 },
+		target: 50,
+	},
+	{
+		durationMs: 10 * CONTRACT_DURATION_UNITS_MS,
+		id: "quick-reset",
+		kind: "prestige",
+		minPrestige: 1,
+		name: "Quick Reset",
+		reward: { goldenCans: 5 },
+		target: 1,
+	},
+	{
+		durationMs: 15 * CONTRACT_DURATION_UNITS_MS,
+		id: "billion-sprint",
+		kind: "run_cans",
+		minPrestige: 2,
+		name: "Billion Sprint",
+		reward: { runUpgradeId: "baristas-secret" },
+		target: 1e9,
+	},
+	{
+		durationMs: 20 * CONTRACT_DURATION_UNITS_MS,
+		id: "caffeine-storm",
+		kind: "frenzy_clicks",
+		minPrestige: 3,
+		name: "Caffeine Storm",
+		reward: { runUpgradeId: "momentum" },
+		target: 500,
+	},
+	{
+		durationMs: 20 * CONTRACT_DURATION_UNITS_MS,
+		id: "can-magnate",
+		kind: "prestige_producers",
+		minPrestige: 3,
+		name: "Can Magnate",
+		reward: { goldenCans: 8 },
+		target: 250,
+	},
+	{
+		durationMs: 15 * CONTRACT_DURATION_UNITS_MS,
+		id: "trillion-dash",
+		kind: "run_cans",
+		minPrestige: 5,
+		name: "Trillion Dash",
+		reward: { goldenCans: 15 },
+		target: 1e12,
+	},
+	{
+		durationMs: 25 * CONTRACT_DURATION_UNITS_MS,
+		id: "industrial-complex",
+		kind: "prestige_producers",
+		minPrestige: 6,
+		name: "Industrial Complex",
+		reward: { runUpgradeId: "singularity-sip" },
+		target: 500,
+	},
+	{
+		durationMs: 20 * CONTRACT_DURATION_UNITS_MS,
+		id: "quadrillion-marathon",
+		kind: "run_cans",
+		minPrestige: 8,
+		name: "Quadrillion Marathon",
+		reward: { goldenCans: 30 },
+		target: 1e15,
+	},
+];
+
+const contractById = new Map(
+	CONTRACTS.map((contract) => [contract.id, contract])
+);
+
+export const getContract = (id: string): ContractDefinition | undefined =>
+	contractById.get(id);
+
 export const GOLDEN_UPGRADES = [
 	{
 		baseCost: 1,
@@ -994,6 +1181,8 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	ascensionSparks: number;
 	bestRunCans: number;
 	cans: number;
+	contract: ContractSnapshot | null;
+	contractCompletions: number;
 	coolant: number;
 	coolantTowers: number;
 	draftTier: number;
@@ -1024,7 +1213,9 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 const producerIds = new Set<string>(ALL_PRODUCERS.map(({ id }) => id));
 const producerById = new Map(ALL_PRODUCERS.map((p) => [p.id, p]));
 const runUpgradeById = new Map(
-	[...RUN_UPGRADES, ...DRAFT_CARDS].map((upgrade) => [upgrade.id, upgrade])
+	[...RUN_UPGRADES, ...DRAFT_CARDS, ...CONTRACT_REWARD_UPGRADES].map(
+		(upgrade) => [upgrade.id, upgrade]
+	)
 );
 const goldenUpgradeById = new Map(
 	GOLDEN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
@@ -1835,5 +2026,249 @@ export const rollGoldenRushReward = (
 		durationMs: PRODUCTION_FRENZY_DURATION_MS,
 		kind: "production_frenzy",
 		multiplier: PRODUCTION_FRENZY_MULTIPLIER,
+	};
+};
+
+export interface ContractState {
+	completedContracts: string[];
+	contract: ContractRuntime | null;
+	contractCompletions: number;
+	goldenCans: number;
+	prestigeLevel: number;
+	runCans: number;
+	totalGoldenCans: number;
+}
+
+export const contractDescription = (contract: ContractDefinition): string => {
+	const minutes = Math.round(contract.durationMs / CONTRACT_DURATION_UNITS_MS);
+	if (contract.kind === "run_cans") {
+		return `Reach ${formatGameNumber(contract.target)} run cans in ${minutes} min`;
+	}
+	if (contract.kind === "frenzy_clicks") {
+		return `Click ${contract.target} cans during frenzies in ${minutes} min`;
+	}
+	if (contract.kind === "prestige") {
+		return `Prestige within ${minutes} min`;
+	}
+	const producerName = contract.producerId
+		? (PRODUCERS.find(({ id }) => id === contract.producerId)?.name ??
+			"producer")
+		: "producers";
+	return contract.producerId
+		? `Prestige while owning ${contract.target}× ${producerName} in ${minutes} min`
+		: `Prestige while owning ${contract.target} ${producerName} in ${minutes} min`;
+};
+
+export const contractReward = (
+	contract: ContractDefinition
+): ContractReward => {
+	const upgrade = contract.reward.runUpgradeId
+		? getRunUpgrade(contract.reward.runUpgradeId)
+		: undefined;
+	return {
+		goldenCans: contract.reward.goldenCans ?? 0,
+		runUpgradeId: upgrade?.id ?? null,
+		runUpgradeName: upgrade?.name ?? null,
+	};
+};
+
+export const offerContract = (
+	prestigeLevel: number,
+	completedContracts: string[],
+	runUpgrades: string[],
+	randomValue: number
+): ContractRuntime | null => {
+	const eligible = CONTRACTS.filter(
+		(contract) =>
+			contract.minPrestige <= Math.max(0, prestigeLevel) &&
+			!completedContracts.includes(contract.id) &&
+			!(
+				contract.reward.runUpgradeId &&
+				runUpgrades.includes(contract.reward.runUpgradeId)
+			)
+	);
+	if (eligible.length === 0) {
+		return null;
+	}
+	const pick =
+		eligible[
+			Math.min(
+				eligible.length - 1,
+				Math.floor(Math.min(1, Math.max(0, randomValue)) * eligible.length)
+			)
+		];
+	if (!pick) {
+		return null;
+	}
+	return {
+		baselinePrestige: 0,
+		baselineRunCans: 0,
+		expiresAt: null,
+		frenzyClicks: 0,
+		id: pick.id,
+		startedAt: null,
+		status: "offered",
+	};
+};
+
+export const activateContract = (
+	contractId: string,
+	runCans: number,
+	prestigeLevel: number,
+	nowMs: number
+): ContractRuntime | null => {
+	const contract = getContract(contractId);
+	if (!contract) {
+		return null;
+	}
+	return {
+		baselinePrestige: Math.max(0, prestigeLevel),
+		baselineRunCans: Math.max(0, runCans),
+		expiresAt: nowMs + contract.durationMs,
+		frenzyClicks: 0,
+		id: contractId,
+		startedAt: nowMs,
+		status: "active",
+	};
+};
+
+const contractProducersOwned = (
+	contract: ContractDefinition,
+	progress: GameProgress
+): number => {
+	if (contract.producerId) {
+		return progress.producers[contract.producerId];
+	}
+	let total = 0;
+	for (const producer of PRODUCERS) {
+		total += progress.producers[producer.id];
+	}
+	return total;
+};
+
+export const contractProgress = (
+	contract: ContractRuntime,
+	progress: GameProgress & ContractState
+): number => {
+	const definition = getContract(contract.id);
+	if (!definition) {
+		return 0;
+	}
+	if (definition.kind === "run_cans") {
+		return Math.max(0, progress.runCans - contract.baselineRunCans);
+	}
+	if (definition.kind === "frenzy_clicks") {
+		return contract.frenzyClicks;
+	}
+	if (definition.kind === "prestige") {
+		return Math.max(0, progress.prestigeLevel - contract.baselinePrestige);
+	}
+	return contractProducersOwned(definition, progress);
+};
+
+const isContractComplete = (
+	contract: ContractRuntime,
+	progress: GameProgress & ContractState
+): boolean => {
+	const definition = getContract(contract.id);
+	if (!definition) {
+		return false;
+	}
+	if (definition.kind === "prestige_producers") {
+		return (
+			progress.prestigeLevel > contract.baselinePrestige &&
+			contractProducersOwned(definition, progress) >= definition.target
+		);
+	}
+	return contractProgress(contract, progress) >= definition.target;
+};
+
+export interface ContractOutcome {
+	completedContractId: string | null;
+	failed: boolean;
+}
+
+export interface ContractEvents {
+	acceptedClicks: number;
+	frenzyActive: boolean;
+}
+
+// ponytail: frenzy click counting approximates per-accrual — a batch of clicks
+// counts only when a frenzy is active at the end of the accrual window, matching
+// how click gains are valued there.
+export const updateContracts = <T extends GameProgress & ContractState>(
+	state: T,
+	events: ContractEvents,
+	nowMs: number,
+	randomValue: number
+): { outcome: ContractOutcome; state: T } => {
+	let contract = state.contract;
+	let completedContractId: string | null = null;
+	let failed = false;
+
+	if (contract?.status === "active") {
+		const definition = getContract(contract.id);
+		if (definition) {
+			if (
+				definition.kind === "frenzy_clicks" &&
+				events.frenzyActive &&
+				events.acceptedClicks > 0
+			) {
+				contract = {
+					...contract,
+					frenzyClicks: clampGameCounter(
+						contract.frenzyClicks + events.acceptedClicks
+					),
+				};
+			}
+			if (contract.expiresAt !== null && nowMs > contract.expiresAt) {
+				failed = true;
+				contract = null;
+			} else if (isContractComplete(contract, state)) {
+				completedContractId = definition.id;
+				contract = null;
+			}
+		} else {
+			contract = null;
+		}
+	}
+
+	let nextState = { ...state, contract };
+	if (completedContractId) {
+		const definition = getContract(completedContractId);
+		const reward = definition ? contractReward(definition) : null;
+		const rewardUpgradeId = reward?.runUpgradeId ?? null;
+		nextState = {
+			...nextState,
+			completedContracts: [...state.completedContracts, completedContractId],
+			contractCompletions: clampGameCounter(state.contractCompletions + 1),
+			goldenCans: clampGameCounter(
+				state.goldenCans + (reward?.goldenCans ?? 0)
+			),
+			runUpgrades:
+				rewardUpgradeId && !state.runUpgrades.includes(rewardUpgradeId)
+					? [...state.runUpgrades, rewardUpgradeId]
+					: state.runUpgrades,
+			totalGoldenCans: clampGameCounter(
+				state.totalGoldenCans + (reward?.goldenCans ?? 0)
+			),
+		};
+	}
+
+	if (!nextState.contract) {
+		nextState = {
+			...nextState,
+			contract: offerContract(
+				nextState.prestigeLevel,
+				nextState.completedContracts,
+				nextState.runUpgrades,
+				randomValue
+			),
+		};
+	}
+
+	return {
+		outcome: { completedContractId, failed },
+		state: nextState,
 	};
 };

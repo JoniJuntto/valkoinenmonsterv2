@@ -17,6 +17,7 @@ import {
 	ASCENSION_WIND_SECONDS,
 	type AscensionNodeId,
 	acceptManualClicks,
+	activateContract,
 	activeFrenzyMultiplier,
 	activeWall,
 	ascensionNodeCost,
@@ -25,12 +26,17 @@ import {
 	ascensionReward,
 	bestStockerPurchase,
 	CLICK_RUSH_MULTIPLIER,
+	type ContractEvents,
+	type ContractSnapshot,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
 	clampGameCounter,
 	clampGameValue,
 	collectUnlockedVariants,
+	contractDescription,
+	contractProgress,
+	contractReward,
 	coolantPerSecond,
 	coolingTowerCost,
 	createHeadStartProducers,
@@ -48,6 +54,7 @@ import {
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
 	getAscensionNode,
+	getContract,
 	getGoldenUpgrade,
 	getRunUpgrade,
 	goldenUpgradeCost,
@@ -75,6 +82,7 @@ import {
 	rollGoldenRushReward,
 	unionCollection,
 	unlockedAchievementIds,
+	updateContracts,
 	worldOfProducer,
 } from "../game";
 import {
@@ -145,6 +153,12 @@ export const agentGameCommandSchema = z.discriminatedUnion("action", [
 		.strict(),
 	z.object({ action: z.literal("prestige"), ...agentOperationId }).strict(),
 	z
+		.object({ action: z.literal("accept_contract"), ...agentOperationId })
+		.strict(),
+	z
+		.object({ action: z.literal("abandon_contract"), ...agentOperationId })
+		.strict(),
+	z
 		.object({
 			action: z.literal("buy_cooling_tower"),
 			...agentOperationId,
@@ -196,6 +210,9 @@ export const createDefaultGameState = (
 		coolantTowers: 0,
 		draftTier: 0,
 		frenzyStacks: 0,
+		completedContracts: [],
+		contract: null,
+		contractCompletions: 0,
 		goldenCans: 0,
 		lifetimeCans: 0,
 		prestigeLevel: 0,
@@ -377,6 +394,32 @@ export const accrueState = (
 ): MutableGameState =>
 	accrueStateWithResult(state, pendingManualClicks, now).state;
 
+const toContractSnapshot = (
+	state: MutableGameState
+): ContractSnapshot | null => {
+	const contract = state.contract;
+	if (!contract) {
+		return null;
+	}
+	const definition = getContract(contract.id);
+	if (!definition) {
+		return null;
+	}
+	return {
+		description: contractDescription(definition),
+		expiresAt: contract.status === "active" ? contract.expiresAt : null,
+		id: definition.id,
+		kind: definition.kind,
+		name: definition.name,
+		producerId: definition.producerId ?? null,
+		progress: contractProgress(contract, state),
+		reward: contractReward(definition),
+		startedAt: contract.startedAt,
+		status: contract.status,
+		target: definition.target,
+	};
+};
+
 const toSnapshot = (
 	state: MutableGameState,
 	isAnonymous: boolean,
@@ -387,7 +430,8 @@ const toSnapshot = (
 	bestRunCans: state.bestRunCans,
 	cans: state.cans,
 	collection: state.collection,
-
+	contract: toContractSnapshot(state),
+	contractCompletions: state.contractCompletions,
 	coolant: state.coolant,
 	coolantTowers: state.coolantTowers,
 	draftTier: state.draftTier,
@@ -462,11 +506,24 @@ export const mutateGameStateWithState = async (
 		collection: collectUnlockedVariants(applied),
 		unlockedAchievements: unlockedAchievementIds(applied),
 	};
-	assertProgressionInvariants(mutated, now);
+	// ponytail: frenzy click credit approximates at accrual-window granularity,
+	// matching how click gains are valued in accrueStateWithResult.
+	const contractEvents: ContractEvents = {
+		acceptedClicks: accrual.acceptedClicks,
+		frenzyActive: (accrual.state.frenzyEndsAt?.getTime() ?? 0) > serverNow,
+	};
+	const contracted = updateContracts(
+		mutated,
+		contractEvents,
+		serverNow,
+		secureRandom()
+	);
+	const final = contracted.state;
+	assertProgressionInvariants(final, now);
 	const [saved] = await database
 		.update(gameState)
 		.set({
-			...mutated,
+			...final,
 			lastOperationId: input.operationId,
 			revision: current.revision + 1,
 			updatedAt: now,
@@ -924,7 +981,7 @@ export const prestige: GameMutation = (state) => {
 		ascensionSparks: clampGameCounter(state.ascensionSparks + sparkGain),
 		bestRunCans: Math.max(state.bestRunCans, state.runCans),
 		cans: 0,
-
+		completedContracts: [],
 		coolantTowers: 0,
 		draftTier: 0,
 		frenzyEndsAt: null,
@@ -947,6 +1004,36 @@ export const prestige: GameMutation = (state) => {
 		);
 	}
 	return nextState;
+};
+
+export const acceptContract: GameMutation = (state, now) => {
+	const offer = state.contract;
+	if (!offer || offer.status !== "offered") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "No contract offer to accept",
+		});
+	}
+	const activated = activateContract(
+		offer.id,
+		state.runCans,
+		state.prestigeLevel,
+		now.getTime()
+	);
+	if (!activated) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown contract" });
+	}
+	return { ...state, contract: activated };
+};
+
+export const abandonContract: GameMutation = (state) => {
+	if (!state.contract) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "No contract to abandon",
+		});
+	}
+	return { ...state, contract: null };
 };
 
 export const resetGameState = (
@@ -982,6 +1069,26 @@ export const gameRouter = router({
 				sessionIsAnonymous(ctx.session),
 				input,
 				buyCoolingTower
+			)
+		),
+	abandonContract: protectedProcedure
+		.input(mutationInput)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				abandonContract
+			)
+		),
+	acceptContract: protectedProcedure
+		.input(mutationInput)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				acceptContract
 			)
 		),
 	buyProducer: protectedProcedure
@@ -1377,6 +1484,18 @@ export const createAgentGameObservation = (
 			operationId: crypto.randomUUID(),
 		});
 	}
+	if (snapshot.contract?.status === "offered") {
+		legalActions.push({
+			action: "accept_contract",
+			operationId: crypto.randomUUID(),
+		});
+	}
+	if (snapshot.contract?.status === "active") {
+		legalActions.push({
+			action: "abandon_contract",
+			operationId: crypto.randomUUID(),
+		});
+	}
 	legalActions.push({
 		action: "reset",
 		confirm: "RESET",
@@ -1460,6 +1579,12 @@ const mutationForAgentCommand = (command: AgentGameCommand): GameMutation => {
 	}
 	if (command.action === "prestige") {
 		return prestige;
+	}
+	if (command.action === "accept_contract") {
+		return acceptContract;
+	}
+	if (command.action === "abandon_contract") {
+		return abandonContract;
 	}
 	if (command.action === "reset") {
 		return resetGameState;

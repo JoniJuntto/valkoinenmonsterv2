@@ -64,6 +64,13 @@
       "when": 1787919122147,
       "tag": "0007_melted_tinkerer",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787922272615,
+      "tag": "0009_dapper_warhawk",
+      "breakpoints": true
     }
   ]
 }

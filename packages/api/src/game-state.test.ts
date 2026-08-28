@@ -22,6 +22,9 @@ const createRow = (): GameStateRow => ({
 	bestRunCans: 0,
 	cans: 0,
 	collection: [],
+	completedContracts: [],
+	contract: null,
+	contractCompletions: 0,
 	coolant: 0,
 	coolantTowers: 0,
 	createdAt: new Date(0),
@@ -184,5 +187,40 @@ describe("persisted game state", () => {
 		expect(() => assertProgressionInvariants(state, new Date(0))).toThrow(
 			"can balances must follow cumulative ordering"
 		);
+	});
+});
+
+describe("contract payloads", () => {
+	test("repairs malformed contract runtime payloads", () => {
+		const row = createRow();
+		row.contract = { id: "bogus", status: "active" };
+		expect(normalizePersistedGameState(row, new Date(0)).contract).toBeNull();
+
+		row.contract = {
+			baselinePrestige: -1,
+			baselineRunCans: 5.9,
+			expiresAt: 600_000,
+			frenzyClicks: "many",
+			id: "warmup-chug",
+			startedAt: 0,
+			status: "active",
+		};
+		const normalized = normalizePersistedGameState(row, new Date(0));
+		expect(normalized.contract?.status).toBe("active");
+		expect(normalized.contract?.baselineRunCans).toBe(5);
+		expect(normalized.contract?.baselinePrestige).toBe(0);
+		expect(normalized.contract?.frenzyClicks).toBe(0);
+
+		row.contract = { id: "warmup-chug", status: "offered" };
+		const offered = normalizePersistedGameState(row, new Date(0));
+		expect(offered.contract?.status).toBe("offered");
+		expect(offered.contract?.expiresAt).toBeNull();
+	});
+
+	test("filters completed contracts to known ids", () => {
+		const row = createRow();
+		row.completedContracts = ["warmup-chug", "warmup-chug", "bogus"];
+		const normalized = normalizePersistedGameState(row, new Date(0));
+		expect(normalized.completedContracts).toEqual(["warmup-chug"]);
 	});
 });
