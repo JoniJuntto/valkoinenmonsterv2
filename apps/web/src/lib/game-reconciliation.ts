@@ -1,12 +1,14 @@
 import {
+	activeFrenzyMultiplier,
 	calculateClickValue,
 	calculateIdleGain,
 	clampGameValue,
 	clickBuffMultiplier,
+	coolantPerSecond,
 	frenzyDurationMs,
-	frenzyMultiplier,
 	type GameSnapshot,
 	GOLDEN_RUSH_VISIBLE_MS,
+	MAX_FRENZY_STACKS,
 	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
 	PRODUCTION_FRENZY_MULTIPLIER,
@@ -35,22 +37,26 @@ export const projectElapsed = (
 			? (snapshot.goldenRushBuffEndsAt ?? 0)
 			: 0;
 	const buffMs = Math.max(0, Math.min(now, buffEnd) - snapshot.lastAccruedAt);
+	const isOffline = elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS;
 	const gain = calculateIdleGain(
 		snapshot,
 		elapsedMs,
 		frenzyMs,
-		elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS
-			? offlineProductionMultiplier(snapshot)
-			: 1,
+		isOffline ? offlineProductionMultiplier(snapshot) : 1,
 		buffMs,
 		PRODUCTION_FRENZY_MULTIPLIER
 	);
+	const coolantGain =
+		coolantPerSecond(snapshot) *
+		(elapsedMs / 1000) *
+		(isOffline ? offlineProductionMultiplier(snapshot) : 1);
 	return {
 		...snapshot,
 		bestRunCans: clampGameValue(
 			Math.max(snapshot.bestRunCans, snapshot.runCans + gain)
 		),
 		cans: clampGameValue(snapshot.cans + gain),
+		coolant: clampGameValue(snapshot.coolant + coolantGain),
 		lastAccruedAt: now,
 		lifetimeCans: clampGameValue(snapshot.lifetimeCans + gain),
 		runCans: clampGameValue(snapshot.runCans + gain),
@@ -71,13 +77,29 @@ export const projectPendingClicks = (
 	const gain =
 		pendingClicks *
 		calculateClickValue(projected) *
-		(isFrenzyActive ? frenzyMultiplier(projected) : 1) *
+		(isFrenzyActive
+			? activeFrenzyMultiplier(projected, projected.frenzyStacks)
+			: 1) *
 		clickBuffMultiplier(projected, now);
-	let { frenzyEndsAt, nextFrenzyClick } = projected;
-	if (!isFrenzyActive && pendingClicks >= nextFrenzyClick) {
-		nextFrenzyClick = 0;
-		frenzyEndsAt = now + frenzyDurationMs(projected);
-	} else if (!isFrenzyActive) {
+	const canStackFrenzy =
+		isFrenzyActive &&
+		projected.ascensionNodes["frenzy-stacking"] > 0 &&
+		projected.frenzyStacks < MAX_FRENZY_STACKS;
+	let { frenzyEndsAt, nextFrenzyClick, frenzyStacks } = projected;
+	if (pendingClicks >= nextFrenzyClick) {
+		if (isFrenzyActive) {
+			if (canStackFrenzy) {
+				frenzyEndsAt =
+					(projected.frenzyEndsAt ?? now) + frenzyDurationMs(projected);
+				frenzyStacks = projected.frenzyStacks + 1;
+				nextFrenzyClick = 0;
+			}
+		} else {
+			nextFrenzyClick = 0;
+			frenzyEndsAt = now + frenzyDurationMs(projected);
+			frenzyStacks = 1;
+		}
+	} else if (!isFrenzyActive || canStackFrenzy) {
 		nextFrenzyClick -= pendingClicks;
 	}
 	projected = {
@@ -87,8 +109,9 @@ export const projectPendingClicks = (
 		),
 		cans: clampGameValue(projected.cans + gain),
 		frenzyEndsAt,
+		frenzyStacks,
 		lifetimeCans: clampGameValue(projected.lifetimeCans + gain),
-		nextFrenzyClick,
+		nextFrenzyClick: Math.max(0, nextFrenzyClick),
 		runCans: clampGameValue(projected.runCans + gain),
 	};
 	return projected;

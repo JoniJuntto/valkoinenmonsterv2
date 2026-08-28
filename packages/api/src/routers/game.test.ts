@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { TRPCError } from "@trpc/server";
 
 import {
+	CLICK_RUSH_DURATION_MS,
 	FLAVOR_UPGRADES,
 	FRENZY_DURATION_MS,
 	frenzyDurationMs,
@@ -19,6 +20,8 @@ const {
 	accrueState,
 	advanceOpenState,
 	agentGameCommandSchema,
+	buyCoolingTower,
+	buyAscensionNode,
 	buyProducer,
 	buyUpgrade,
 	claimGoldenRush,
@@ -30,6 +33,7 @@ const {
 	prestige,
 	rankLeaderboard,
 	resetGameState,
+	ventWall,
 } = await import("./game");
 
 const operationId = "00000000-0000-4000-8000-000000000001";
@@ -88,6 +92,18 @@ describe("server-authoritative mutations", () => {
 		expect(() => buyUpgrade("draft-frenzy-chug")(state, new Date(0))).toThrow(
 			"only offered in flavor drafts"
 		);
+	});
+
+	test("master key unlocks golden upgrades one prestige level earlier per rank", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.prestigeLevel = 1;
+		state.goldenCans = 10;
+		expect(() => buyUpgrade("auto-tapper")(state, new Date(0))).toThrow(
+			"Golden upgrade is locked"
+		);
+		state.ascensionNodes["master-key"] = 1;
+		const upgraded = buyUpgrade("auto-tapper")(state, new Date(0));
+		expect(upgraded.goldenUpgrades["auto-tapper"]).toBe(1);
 	});
 
 	test("buys producers in bulk for the summed sequential cost", () => {
@@ -221,6 +237,17 @@ describe("server-authoritative mutations", () => {
 		);
 	});
 
+	test("golden echo doubles golden rush buff durations", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.ascensionNodes["golden-echo"] = 1;
+		state.goldenRushReadyAt = new Date(1000);
+		const echoed = claimGoldenRush(0.5, 0.1)(state, new Date(1000));
+		expect(echoed.goldenRushBuffKind).toBe("click_rush");
+		expect(echoed.goldenRushBuffEndsAt?.getTime()).toBe(
+			1000 + CLICK_RUSH_DURATION_MS * 2
+		);
+	});
+
 	test("rolls codex drops from golden rush claims", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.goldenRushReadyAt = new Date(1000);
@@ -249,6 +276,54 @@ describe("server-authoritative mutations", () => {
 		expect(reset.producers["taurine-comet"]).toBe(0);
 	});
 
+	test("vents walls in order with coolant", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.runCans = 1e12;
+		expect(() => ventWall(state, new Date(0))).toThrow("Not enough coolant");
+		state.coolant = 99;
+		expect(() => ventWall(state, new Date(0))).toThrow("Not enough coolant");
+		state.coolant = 100;
+		const vented = ventWall(state, new Date(0));
+		expect(vented.coolant).toBe(0);
+		expect(vented.ventedWalls).toEqual(["overheat"]);
+		expect(() => ventWall(vented, new Date(0))).toThrow("No wall to vent");
+	});
+
+	test("buys cooling towers with cans", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		expect(() => buyCoolingTower(state, new Date(0))).toThrow(
+			"Not enough cans"
+		);
+		state.cans = 199_999_999_999;
+		expect(() => buyCoolingTower(state, new Date(0))).toThrow(
+			"Not enough cans"
+		);
+		state.cans = 200_000_000_000;
+		const purchased = buyCoolingTower(state, new Date(0));
+		expect(purchased.coolantTowers).toBe(1);
+		expect(purchased.cans).toBe(0);
+	});
+
+	test("accrues coolant from towers with the offline penalty", () => {
+		const online = createDefaultGameState("online", new Date(0));
+		online.coolantTowers = 2;
+		expect(accrueState(online, 0, new Date(10_000)).coolant).toBeCloseTo(10);
+
+		const offline = createDefaultGameState("offline", new Date(0));
+		offline.coolantTowers = 2;
+		expect(accrueState(offline, 0, new Date(15_000)).coolant).toBeCloseTo(1.5);
+	});
+
+	test("halves accrual while overheated until the wall is vented", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.producers["mini-fridge"] = 1;
+		state.runCans = 1e12;
+		expect(accrueState(state, 0, new Date(10_000)).cans).toBeCloseTo(5);
+		state.coolant = 100;
+		const vented = ventWall(state, new Date(0));
+		expect(accrueState(vented, 0, new Date(10_000)).cans).toBeCloseTo(10);
+	});
+
 	test("resets and preserves every prestige field by contract", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.cans = 120_000;
@@ -265,6 +340,7 @@ describe("server-authoritative mutations", () => {
 		state.manualClickBudget = 37.5;
 		state.lastAccruedAt = new Date(1234);
 		state.frenzyEndsAt = new Date(2000);
+		state.frenzyStacks = 2;
 		state.goldenRushReadyAt = new Date(3000);
 		state.goldenRushBuffKind = "production_frenzy";
 		state.goldenRushBuffEndsAt = new Date(4000);
@@ -275,6 +351,12 @@ describe("server-authoritative mutations", () => {
 			"draft-frenzy-chug",
 		];
 		state.shadowBanned = true;
+		state.coolant = 55;
+		state.coolantTowers = 2;
+		state.ventedWalls = ["overheat"];
+		state.ascensionSparks = 4;
+		state.totalAscensionSparks = 9;
+		state.ascensionNodes["master-key"] = 1;
 		const reset = prestige(state, new Date(0));
 		expect(reset.cans).toBe(0);
 		expect(reset.runCans).toBe(0);
@@ -289,6 +371,7 @@ describe("server-authoritative mutations", () => {
 		expect(reset.totalGoldenCans).toBe(5);
 		expect(reset.prestigeLevel).toBe(7);
 		expect(reset.frenzyEndsAt).toBeNull();
+		expect(reset.frenzyStacks).toBe(0);
 		expect(reset.nextFrenzyClick).toBeGreaterThanOrEqual(1);
 		expect(reset.manualClickBudget).toBe(37.5);
 		expect(reset.lastAccruedAt).toEqual(new Date(1234));
@@ -297,6 +380,12 @@ describe("server-authoritative mutations", () => {
 		expect(reset.goldenRushBuffEndsAt).toEqual(new Date(4000));
 		expect(reset.draftTier).toBe(0);
 		expect(reset.runDraft).toBeNull();
+		expect(reset.coolant).toBe(55);
+		expect(reset.coolantTowers).toBe(0);
+		expect(reset.ventedWalls).toEqual([]);
+		expect(reset.ascensionSparks).toBe(4);
+		expect(reset.totalAscensionSparks).toBe(9);
+		expect(reset.ascensionNodes["master-key"]).toBe(1);
 		expect(reset.userId).toBe("user");
 		expect(reset.createdAt).toEqual(new Date(0));
 		expect(reset.shadowBanned).toBe(true);
@@ -314,6 +403,73 @@ describe("server-authoritative mutations", () => {
 		expect(reset.goldenCans).toBe(1);
 		expect(reset.prestigeLevel).toBe(2);
 		expect(reset.totalGoldenCans).toBe(3);
+	});
+
+	test("earns ascension sparks on prestige without re-farming potential", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.totalGoldenCans = 100;
+		state.lifetimeCans = 60_000_000_000;
+		const reset = prestige(state, new Date(0));
+		// reward = sqrt(6e10 / 1e6) - 100 = 144 golden cans
+		// sparks = floor(sqrt(244) / 5) = 3
+		expect(reset.totalGoldenCans).toBe(244);
+		expect(reset.ascensionSparks).toBe(3);
+		expect(reset.totalAscensionSparks).toBe(3);
+
+		reset.lifetimeCans = 100_000_000_000;
+		const again = prestige(reset, new Date(0));
+		// total golden cans 316 → potential floor(sqrt(316)/5) = 3 → no new sparks
+		expect(again.totalGoldenCans).toBe(316);
+		expect(again.ascensionSparks).toBe(3);
+		expect(again.totalAscensionSparks).toBe(3);
+	});
+
+	test("second nature pre-owns upgrades and second wind banks five minutes", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.ascensionNodes["second-nature"] = 3;
+		state.ascensionNodes["second-wind"] = 1;
+		state.producers["mini-fridge"] = 1;
+		state.lifetimeCans = 1_000_000;
+		const reset = prestige(state, new Date(0));
+		expect(reset.runUpgrades).toEqual([
+			"cold-can",
+			"firm-grip",
+			"steel-finger",
+		]);
+		// pre-reset cps = 1 (mini-fridge) × 1.01 (First Million) = 1.01 → 300s
+		expect(reset.cans).toBeCloseTo(303);
+	});
+
+	test("validates ascension node purchases", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		expect(() => buyAscensionNode("unknown-node")(state, new Date(0))).toThrow(
+			"Unknown ascension node"
+		);
+		expect(() => buyAscensionNode("second-nature")(state, new Date(0))).toThrow(
+			"Not enough ascension sparks"
+		);
+		expect(() => buyAscensionNode("second-wind")(state, new Date(0))).toThrow(
+			"Ascension node is locked"
+		);
+
+		state.ascensionSparks = 1;
+		const first = buyAscensionNode("second-nature")(state, new Date(0));
+		expect(first.ascensionSparks).toBe(0);
+		expect(first.ascensionNodes["second-nature"]).toBe(1);
+
+		expect(() => buyAscensionNode("second-nature")(first, new Date(0))).toThrow(
+			"Not enough ascension sparks"
+		);
+
+		first.ascensionSparks = 10;
+		const second = buyAscensionNode("second-nature")(first, new Date(0));
+		expect(second.ascensionNodes["second-nature"]).toBe(2);
+		expect(second.ascensionSparks).toBe(8);
+
+		second.ascensionNodes["second-nature"] = 3;
+		expect(() =>
+			buyAscensionNode("second-nature")(second, new Date(0))
+		).toThrow("Ascension node is maxed");
 	});
 });
 
@@ -349,6 +505,47 @@ describe("server accrual and leaderboard", () => {
 		const accrued = accrueState(state, 1, new Date(FRENZY_DURATION_MS));
 		expect(accrued.cans).toBe(81);
 		expect(accrued.frenzyEndsAt).toBeNull();
+	});
+
+	test("twin fizz stacks a frenzy triggered during an active one", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.producers["mini-fridge"] = 1;
+		state.ascensionNodes["master-key"] = 1;
+		state.ascensionNodes["frenzy-stacking"] = 1;
+		state.frenzyEndsAt = new Date(FRENZY_DURATION_MS);
+		state.frenzyStacks = 1;
+		state.nextFrenzyClick = 1;
+		const stacked = accrueState(state, 1, new Date(0));
+		expect(stacked.frenzyEndsAt?.getTime()).toBe(FRENZY_DURATION_MS * 2);
+		expect(stacked.frenzyStacks).toBe(2);
+
+		// stacks cap at two: further triggers neither extend nor bump
+		stacked.nextFrenzyClick = 1;
+		stacked.lastAccruedAt = new Date(0);
+		const capped = accrueState(stacked, 1, new Date(0));
+		expect(capped.frenzyEndsAt?.getTime()).toBe(FRENZY_DURATION_MS * 2);
+		expect(capped.frenzyStacks).toBe(2);
+
+		// without the node, triggering during a frenzy does nothing
+		const plain = createDefaultGameState("user", new Date(0));
+		plain.frenzyEndsAt = new Date(FRENZY_DURATION_MS);
+		plain.frenzyStacks = 1;
+		plain.nextFrenzyClick = 1;
+		const untouched = accrueState(plain, 1, new Date(0));
+		expect(untouched.frenzyEndsAt?.getTime()).toBe(FRENZY_DURATION_MS);
+		expect(untouched.frenzyStacks).toBe(1);
+	});
+
+	test("stacked frenzies double the production multiplier", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.producers["mini-fridge"] = 1;
+		state.frenzyEndsAt = new Date(FRENZY_DURATION_MS);
+		state.frenzyStacks = 2;
+		const accrued = accrueState(state, 0, new Date(10_000));
+		// 10s at 1 CPS with 8s of ×10 frenzy stacked to ×20 = 10 + 8 × 19 = 162
+		expect(accrued.cans).toBe(162);
+		expect(accrued.frenzyEndsAt).toBeNull();
+		expect(accrued.frenzyStacks).toBe(0);
 	});
 
 	test("applies production buffs for their overlap and then clears them", () => {
@@ -413,6 +610,13 @@ describe("JSON agent game mode", () => {
 			{ action: "buy_producer", operationId, producerId: "pull-tab" },
 			{ action: "buy_upgrade", operationId, upgradeId: "cold-can" },
 			{ action: "pick_draft", operationId, optionIndex: 2 },
+			{ action: "buy_cooling_tower", operationId },
+			{ action: "vent_wall", operationId },
+			{
+				action: "buy_ascension_node",
+				nodeId: "second-nature",
+				operationId,
+			},
 			{ action: "wait", milliseconds: 5000, operationId },
 			{ action: "prestige", operationId },
 			{ action: "reset", confirm: "RESET", operationId },
@@ -426,6 +630,7 @@ describe("JSON agent game mode", () => {
 			{ action: "click", count: 0, operationId },
 			{ action: "click", count: 10_001, operationId },
 			{ action: "pick_draft", operationId, optionIndex: 3 },
+			{ action: "buy_ascension_node", operationId },
 			{ action: "wait", milliseconds: 3_600_001, operationId },
 			{ action: "reset", confirm: "yes", operationId },
 			{ action: "prestige", operationId: "not-a-uuid" },
@@ -491,10 +696,16 @@ describe("JSON agent game mode", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.cans = 100;
 		const snapshot = {
+			ascensionNodes: state.ascensionNodes,
+			ascensionSparks: state.ascensionSparks,
 			bestRunCans: state.bestRunCans,
 			cans: state.cans,
+			collection: state.collection,
+			coolant: state.coolant,
+			coolantTowers: state.coolantTowers,
 			draftTier: 0,
 			frenzyEndsAt: null,
+			frenzyStacks: state.frenzyStacks,
 			goldenCans: state.goldenCans,
 			goldenRushBuffEndsAt: null,
 			goldenRushBuffKind: null,
@@ -513,8 +724,10 @@ describe("JSON agent game mode", () => {
 			runDraft: null,
 			runUpgrades: state.runUpgrades,
 			serverNow: 0,
+			totalAscensionSparks: state.totalAscensionSparks,
 			totalGoldenCans: state.totalGoldenCans,
 			unlockedAchievements: state.unlockedAchievements,
+			ventedWalls: state.ventedWalls,
 		};
 		const observation = createAgentGameObservation(state, snapshot, [], {
 			action: "observe",

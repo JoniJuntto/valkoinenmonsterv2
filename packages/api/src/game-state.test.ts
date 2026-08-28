@@ -3,6 +3,7 @@ import type { GameStateRow } from "@valkoinenmonsterv2/db/schema/game";
 
 import {
 	CLICK_RUSH_DURATION_MS,
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	FLAVOR_UPGRADES,
@@ -16,12 +17,17 @@ import {
 } from "./game-state";
 
 const createRow = (): GameStateRow => ({
+	ascensionNodes: createInitialAscensionNodes(),
+	ascensionSparks: 0,
 	bestRunCans: 0,
 	cans: 0,
 	collection: [],
+	coolant: 0,
+	coolantTowers: 0,
 	createdAt: new Date(0),
 	draftTier: 0,
 	frenzyEndsAt: null,
+	frenzyStacks: 0,
 	goldenCans: 0,
 	goldenRushBuffEndsAt: null,
 	goldenRushBuffKind: null,
@@ -39,10 +45,12 @@ const createRow = (): GameStateRow => ({
 	runDraft: null,
 	runUpgrades: [],
 	shadowBanned: false,
+	totalAscensionSparks: 0,
 	totalGoldenCans: 0,
 	unlockedAchievements: [],
 	updatedAt: new Date(0),
 	userId: "user",
+	ventedWalls: [],
 });
 
 describe("persisted game state", () => {
@@ -61,6 +69,9 @@ describe("persisted game state", () => {
 		row.producers = { "pull-tab": 2.9, unknown: 10 };
 		row.runUpgrades = ["cold-can", "unknown", "cold-can"];
 		row.goldenUpgrades = { "golden-grip": 100, unknown: 2 };
+		row.ascensionNodes = { "second-nature": 9, unknown: 2 };
+		row.ascensionSparks = 12.9;
+		row.totalAscensionSparks = 7;
 
 		const normalized = normalizePersistedGameState(row, new Date(1000));
 
@@ -79,9 +90,36 @@ describe("persisted game state", () => {
 		expect(normalized.runUpgrades).toEqual(["cold-can"]);
 		expect(normalized.goldenUpgrades["golden-grip"]).toBe(25);
 		expect(Object.keys(normalized.goldenUpgrades)).not.toContain("unknown");
+		expect(normalized.ascensionNodes["second-nature"]).toBe(3);
+		expect(Object.keys(normalized.ascensionNodes)).not.toContain("unknown");
+		expect(normalized.ascensionSparks).toBe(7);
+		expect(normalized.totalAscensionSparks).toBe(7);
 		expect(() =>
 			assertProgressionInvariants(normalized, new Date(1000))
 		).not.toThrow();
+	});
+
+	test("repairs coolant balances and vented wall prefixes", () => {
+		const row = createRow();
+		row.coolant = Number.NaN;
+		row.coolantTowers = 2.9;
+		row.ventedWalls = ["blackout", "overheat", "unknown"];
+
+		const normalized = normalizePersistedGameState(row, new Date(0));
+
+		expect(normalized.coolant).toBe(0);
+		expect(normalized.coolantTowers).toBe(2);
+		// "blackout" is dropped, leaving the longest valid vented prefix.
+		expect(normalized.ventedWalls).toEqual(["overheat"]);
+		expect(() =>
+			assertProgressionInvariants(normalized, new Date(0))
+		).not.toThrow();
+
+		row.coolant = 42;
+		row.ventedWalls = ["overheat"];
+		const clean = normalizePersistedGameState(row, new Date(0));
+		expect(clean.coolant).toBe(42);
+		expect(clean.ventedWalls).toEqual(["overheat"]);
 	});
 
 	test("repairs future and malformed timers to canonical horizons", () => {

@@ -1,5 +1,5 @@
 {
-  "id": "93ccd18e-19b7-4535-aae7-e1eb6527b72d",
+  "id": "c2a1e2ea-c21b-4c58-ab35-b8e1bc975ebf",
   "prevId": "b978b6eb-2358-4b4f-8c49-d5aaa04cfdb9",
   "version": "7",
   "dialect": "postgresql",
@@ -110,8 +110,12 @@
           "name": "account_user_id_user_id_fk",
           "tableFrom": "account",
           "tableTo": "user",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -198,8 +202,12 @@
           "name": "session_user_id_user_id_fk",
           "tableFrom": "session",
           "tableTo": "user",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -209,7 +217,9 @@
         "session_token_unique": {
           "name": "session_token_unique",
           "nullsNotDistinct": false,
-          "columns": ["token"]
+          "columns": [
+            "token"
+          ]
         }
       },
       "policies": {},
@@ -280,7 +290,9 @@
         "user_email_unique": {
           "name": "user_email_unique",
           "nullsNotDistinct": false,
-          "columns": ["email"]
+          "columns": [
+            "email"
+          ]
         }
       },
       "policies": {},
@@ -358,6 +370,20 @@
       "name": "game_state",
       "schema": "",
       "columns": {
+        "ascension_nodes": {
+          "name": "ascension_nodes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "ascension_sparks": {
+          "name": "ascension_sparks",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "best_run_cans": {
           "name": "best_run_cans",
           "type": "double precision",
@@ -386,18 +412,18 @@
           "notNull": true,
           "default": "now()"
         },
-        "draft_tier": {
-          "name": "draft_tier",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "frenzy_ends_at": {
           "name": "frenzy_ends_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "frenzy_stacks": {
+          "name": "frenzy_stacks",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "golden_cans": {
           "name": "golden_cans",
@@ -490,12 +516,6 @@
           "notNull": true,
           "default": 0
         },
-        "run_draft": {
-          "name": "run_draft",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "run_upgrades": {
           "name": "run_upgrades",
           "type": "jsonb",
@@ -508,6 +528,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "total_ascension_sparks": {
+          "name": "total_ascension_sparks",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "total_golden_cans": {
           "name": "total_golden_cans",
@@ -543,8 +570,12 @@
           "name": "game_state_user_id_user_id_fk",
           "tableFrom": "game_state",
           "tableTo": "user",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -645,8 +676,12 @@
           "name": "season_state_user_id_user_id_fk",
           "tableFrom": "season_state",
           "tableTo": "user",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -654,7 +689,10 @@
       "compositePrimaryKeys": {
         "season_state_user_id_season_id_pk": {
           "name": "season_state_user_id_season_id_pk",
-          "columns": ["user_id", "season_id"]
+          "columns": [
+            "user_id",
+            "season_id"
+          ]
         }
       },
       "uniqueConstraints": {},

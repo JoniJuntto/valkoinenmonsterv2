@@ -1,10 +1,14 @@
 import type { GameStateRow } from "@valkoinenmonsterv2/db/schema/game";
 
 import {
+	ASCENSION_NODES,
+	type AscensionNodeId,
+	type AscensionNodeRanks,
 	CLICK_RUSH_DURATION_MS,
 	clampGameCounter,
 	clampGameValue,
 	countRunUpgradesOfKind,
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	DRAFT_SIZE,
@@ -23,19 +27,25 @@ import {
 	isDraftOnlyKind,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
+	isWallId,
+	MAX_FRENZY_STACKS,
 	MAX_GAME_VALUE,
 	MAX_MANUAL_CLICK_BUDGET,
 	MAX_PERSISTED_COUNTER,
 	PRODUCERS,
 	PRODUCTION_FRENZY_DURATION_MS,
 	type ProducerCounts,
+	WALLS,
 } from "./game";
 
 export type MutableGameState = Omit<
 	GameStateRow,
-	"producers" | "goldenUpgrades" | "goldenRushBuffKind"
+	"producers" | "goldenUpgrades" | "goldenRushBuffKind" | "ascensionNodes"
 > &
-	GameProgress & { goldenRushBuffKind: GoldenRushBuffKind | null };
+	GameProgress & {
+		ascensionNodes: AscensionNodeRanks;
+		goldenRushBuffKind: GoldenRushBuffKind | null;
+	};
 
 const finiteInteger = (
 	value: number,
@@ -80,6 +90,22 @@ const normalizeGoldenUpgrades = (value: unknown): GoldenUpgradeRanks => {
 	return upgrades;
 };
 
+const normalizeAscensionNodes = (value: unknown): AscensionNodeRanks => {
+	const nodes = createInitialAscensionNodes();
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return nodes;
+	}
+	const stored = value as Record<string, unknown>;
+	for (const node of ASCENSION_NODES) {
+		const rank = stored[node.id];
+		nodes[node.id as AscensionNodeId] = finiteInteger(
+			typeof rank === "number" ? rank : 0,
+			node.maxRank
+		);
+	}
+	return nodes;
+};
+
 const normalizeTimer = (
 	value: Date | null,
 	serverNowMs: number,
@@ -113,6 +139,21 @@ const normalizeRunDraft = (
 		),
 	];
 	return options.length === DRAFT_SIZE ? options : null;
+};
+
+const normalizeVentedWalls = (value: unknown): string[] => {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const vented = new Set(value.filter(isWallId));
+	const prefix: string[] = [];
+	for (const wall of WALLS) {
+		if (!vented.has(wall.id)) {
+			break;
+		}
+		prefix.push(wall.id);
+	}
+	return prefix;
 };
 
 export const normalizeCanBalances = (state: GameStateRow) => {
@@ -160,34 +201,51 @@ export const normalizePersistedGameState = (
 		clampGameCounter(state.draftTier)
 	);
 	const runDraft = normalizeRunDraft(state.runDraft, draftTier);
-	const frenzyHorizonMs =
+	const ascensionNodes = normalizeAscensionNodes(state.ascensionNodes);
+	const frenzyAllowanceMs =
 		FRENZY_DURATION_MS +
 		goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
 		countRunUpgradesOfKind(runUpgrades, "frenzy-duration") *
 			FRENZY_DRAFT_BONUS_MS;
+	const frenzyEndsAt = normalizeTimer(
+		state.frenzyEndsAt,
+		serverNowMs,
+		ascensionNodes["frenzy-stacking"] > 0
+			? frenzyAllowanceMs * MAX_FRENZY_STACKS
+			: frenzyAllowanceMs
+	);
 	const goldenRushBuffKind =
 		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
 			? state.goldenRushBuffKind
 			: null;
 	const buffDurationMs =
-		goldenRushBuffKind === "click_rush"
+		(goldenRushBuffKind === "click_rush"
 			? CLICK_RUSH_DURATION_MS
-			: PRODUCTION_FRENZY_DURATION_MS;
+			: PRODUCTION_FRENZY_DURATION_MS) *
+		(ascensionNodes["golden-echo"] > 0 ? 2 : 1);
 	const goldenRushBuffEndsAt = goldenRushBuffKind
 		? normalizeTimer(state.goldenRushBuffEndsAt, serverNowMs, buffDurationMs)
 		: null;
 
+	const totalAscensionSparks = clampGameCounter(state.totalAscensionSparks);
+
 	return {
 		...state,
+		ascensionNodes,
+		ascensionSparks: Math.min(
+			clampGameCounter(state.ascensionSparks),
+			totalAscensionSparks
+		),
 		bestRunCans,
 		cans,
 		collection: normalizeCollection(state.collection),
+		coolant: clampGameValue(state.coolant),
+		coolantTowers: clampGameCounter(state.coolantTowers),
 		draftTier,
-		frenzyEndsAt: normalizeTimer(
-			state.frenzyEndsAt,
-			serverNowMs,
-			frenzyHorizonMs
-		),
+		frenzyEndsAt,
+		frenzyStacks: frenzyEndsAt
+			? finiteInteger(state.frenzyStacks, MAX_FRENZY_STACKS)
+			: 0,
 		goldenCans,
 		goldenRushBuffEndsAt,
 		goldenRushBuffKind: goldenRushBuffEndsAt ? goldenRushBuffKind : null,
@@ -217,10 +275,12 @@ export const normalizePersistedGameState = (
 		runCans,
 		runDraft,
 		runUpgrades,
+		totalAscensionSparks,
 		totalGoldenCans,
 		unlockedAchievements: Array.isArray(state.unlockedAchievements)
 			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
 			: [],
+		ventedWalls: normalizeVentedWalls(state.ventedWalls),
 	};
 };
 
@@ -243,6 +303,21 @@ const assertDraftInvariants = (state: MutableGameState): void => {
 				new Set(state.runDraft).size === DRAFT_SIZE &&
 				state.runDraft.every(isDraftOptionId)),
 		"run draft must offer valid draft-only upgrades"
+	);
+};
+
+const assertWallStateInvariants = (state: MutableGameState): void => {
+	invariant(
+		Number.isFinite(state.coolant) &&
+			state.coolant >= 0 &&
+			state.coolant <= MAX_GAME_VALUE,
+		"coolant must be finite and non-negative"
+	);
+	invariant(
+		Number.isInteger(state.coolantTowers) &&
+			state.coolantTowers >= 0 &&
+			state.coolantTowers <= MAX_PERSISTED_COUNTER,
+		"cooling tower count must be valid"
 	);
 };
 
@@ -310,6 +385,22 @@ export const assertProgressionInvariants = (
 		"golden upgrade ranks must match the catalog"
 	);
 	invariant(
+		Object.keys(state.ascensionNodes).length === ASCENSION_NODES.length &&
+			ASCENSION_NODES.every(({ id, maxRank }) => {
+				const rank = state.ascensionNodes[id as AscensionNodeId] ?? 0;
+				return Number.isInteger(rank) && rank >= 0 && rank <= maxRank;
+			}),
+		"ascension node ranks must match the catalog"
+	);
+	invariant(
+		Number.isInteger(state.ascensionSparks) &&
+			state.ascensionSparks >= 0 &&
+			Number.isInteger(state.totalAscensionSparks) &&
+			state.totalAscensionSparks <= MAX_PERSISTED_COUNTER &&
+			state.ascensionSparks <= state.totalAscensionSparks,
+		"ascension spark balances must be valid"
+	);
+	invariant(
 		state.collection.length === new Set(state.collection).size &&
 			state.collection.every(isCanVariantId),
 		"collection variants must be known and unique"
@@ -320,9 +411,23 @@ export const assertProgressionInvariants = (
 			state.manualClickBudget <= MAX_MANUAL_CLICK_BUDGET,
 		"manual click budget must be bounded"
 	);
+	assertWallStateInvariants(state);
+	const wallIdOrder = WALLS.map(({ id }) => id);
+	invariant(
+		state.ventedWalls.length <= wallIdOrder.length &&
+			state.ventedWalls.every((id, index) => id === wallIdOrder[index]),
+		"vented walls must be a prefix of the wall catalog"
+	);
 	invariant(
 		Number.isInteger(state.nextFrenzyClick) && state.nextFrenzyClick >= 1,
 		"next frenzy click must be a positive integer"
+	);
+	invariant(
+		Number.isInteger(state.frenzyStacks) &&
+			state.frenzyStacks >= 0 &&
+			state.frenzyStacks <= MAX_FRENZY_STACKS &&
+			(state.frenzyStacks === 0) === (state.frenzyEndsAt === null),
+		"frenzy stacks must pair with the frenzy timer"
 	);
 	invariant(
 		validDate(state.lastAccruedAt) &&
@@ -337,10 +442,11 @@ export const assertProgressionInvariants = (
 	const serverNowMs = serverNow.getTime();
 	const maximumFrenzyEnd =
 		serverNowMs +
-		FRENZY_DURATION_MS +
-		state.goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
-		countRunUpgradesOfKind(state.runUpgrades, "frenzy-duration") *
-			FRENZY_DRAFT_BONUS_MS;
+		(FRENZY_DURATION_MS +
+			state.goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS +
+			countRunUpgradesOfKind(state.runUpgrades, "frenzy-duration") *
+				FRENZY_DRAFT_BONUS_MS) *
+			(state.ascensionNodes["frenzy-stacking"] > 0 ? MAX_FRENZY_STACKS : 1);
 	invariant(
 		state.frenzyEndsAt === null ||
 			(validDate(state.frenzyEndsAt) &&
@@ -355,9 +461,10 @@ export const assertProgressionInvariants = (
 		"golden rush readiness must use the canonical horizon"
 	);
 	const maximumBuffDuration =
-		state.goldenRushBuffKind === "click_rush"
+		(state.goldenRushBuffKind === "click_rush"
 			? CLICK_RUSH_DURATION_MS
-			: PRODUCTION_FRENZY_DURATION_MS;
+			: PRODUCTION_FRENZY_DURATION_MS) *
+		(state.ascensionNodes["golden-echo"] > 0 ? 2 : 1);
 	invariant(
 		state.goldenRushBuffEndsAt === null ||
 			(validDate(state.goldenRushBuffEndsAt) &&

@@ -2,10 +2,17 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
+	ASCENSION_NODES,
+	type AscensionNodeId,
+	activeFrenzyMultiplier,
+	activeWall,
+	ascensionNodeCost,
+	ascensionNodeUnlocked,
 	bestStockerPurchase,
 	CAN_VARIANTS,
 	CLICK_RUSH_MULTIPLIER,
 	COLLECTION_SETS,
+	COOLANT_PER_TOWER_PER_SEC,
 	type CollectionSetId,
 	calculateClickValue,
 	calculateCps,
@@ -13,19 +20,22 @@ import {
 	clickBuffMultiplier,
 	collectionMultiplier,
 	completedCollectionSets,
+	coolantPerSecond,
+	coolingTowerCost,
 	countUnlockedAchievements,
 	FLAVOR_UPGRADES,
 	formatGameNumber,
 	frenzyDurationMs,
-	frenzyMultiplier,
 	type GameSnapshot,
 	GOLDEN_CAN_BASE,
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
 	getRunUpgrade,
 	goldenUpgradeCost,
+	goldenUpgradeUnlockLevel,
 	isDraftOnlyKind,
 	isGoldenUpgradeId,
+	MAX_FRENZY_STACKS,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
 	PRODUCER_SYNERGIES,
@@ -39,6 +49,7 @@ import {
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
 	SYNERGY_BONUS_PER_OWNED,
+	WALLS,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -134,12 +145,16 @@ type MutationActionName =
 	| "buy_producer"
 	| "buy_upgrade"
 	| "pick_draft"
+	| "buy_cooling_tower"
+	| "vent_wall"
+	| "buy_ascension_node"
 	| "claim_golden_rush"
 	| "trigger_frenzy"
 	| "prestige";
 
 interface MutationOptions {
 	action: MutationActionName;
+	nodeId?: string;
 	optionIndex?: number;
 	producerId?: ProducerId;
 	producerQuantity?: number;
@@ -226,6 +241,20 @@ const trackMutationSuccess = (
 			}
 			break;
 		}
+		case "buy_ascension_node": {
+			if (!options.nodeId) {
+				break;
+			}
+			const nodeId = options.nodeId as AscensionNodeId;
+			const rank = projected.ascensionNodes[nodeId] ?? 0;
+			track(AnalyticsEvents.game.purchaseAscensionNode, {
+				cost_sparks: ascensionNodeCost(nodeId, Math.max(0, rank - 1)),
+				node_id: options.nodeId,
+				rank_after: rank,
+				total_sparks: projected.totalAscensionSparks,
+			});
+			break;
+		}
 		case "prestige": {
 			track(AnalyticsEvents.game.prestigeConfirmed, {
 				prestige_level: before.prestigeLevel,
@@ -236,6 +265,30 @@ const trackMutationSuccess = (
 				run_cans_bucket: bucketCans(before.runCans),
 			});
 			setUserTraits({ prestige_level: projected.prestigeLevel });
+			break;
+		}
+		case "buy_cooling_tower": {
+			track(AnalyticsEvents.game.coolingTowerPurchased, {
+				cost: coolingTowerCost(Math.max(0, projected.coolantTowers - 1)),
+				owned_after: projected.coolantTowers,
+				run_cans_bucket: bucketCans(projected.runCans),
+			});
+			break;
+		}
+		case "vent_wall": {
+			const ventedWall = WALLS.find(
+				({ id }) =>
+					!before.ventedWalls.includes(id) && projected.ventedWalls.includes(id)
+			);
+			if (!ventedWall) {
+				break;
+			}
+			track(AnalyticsEvents.game.wallVented, {
+				prestige_level: projected.prestigeLevel,
+				run_cans_bucket: bucketCans(projected.runCans),
+				vent_cost: ventedWall.ventCost,
+				wall_id: ventedWall.id,
+			});
 			break;
 		}
 		case "trigger_frenzy": {
@@ -359,6 +412,10 @@ const NUTRITION_ROWS: {
 	{ label: "Prestige level", value: (game) => String(game.prestigeLevel) },
 	{ label: "Golden cans", value: (game) => formatGameNumber(game.goldenCans) },
 	{
+		label: "Ascension sparks",
+		value: (game) => String(Math.floor(game.ascensionSparks)),
+	},
+	{
 		label: "Caffeine level",
 		value: (game) => `+${countUnlockedAchievements(game)}%`,
 	},
@@ -372,7 +429,9 @@ const StatsCard = ({
 }: StatsCardProps) => {
 	const clickValue =
 		calculateClickValue(game) *
-		((game.frenzyEndsAt ?? 0) > game.serverNow ? frenzyMultiplier(game) : 1) *
+		((game.frenzyEndsAt ?? 0) > game.serverNow
+			? activeFrenzyMultiplier(game, game.frenzyStacks)
+			: 1) *
 		clickBuffMultiplier(game, game.serverNow);
 	const reward = prestigeReward(game.lifetimeCans, game.totalGoldenCans);
 	const nextRequirement = nextGoldenCanRequirement(game.totalGoldenCans);
@@ -498,7 +557,7 @@ const CanCard = ({
 				<div>
 					<CardTitle className="font-display text-3xl uppercase leading-none tracking-wide">
 						{isFrenzyActive
-							? `Frenzy ×${frenzyMultiplier(game)}`
+							? `Frenzy ×${activeFrenzyMultiplier(game, game.frenzyStacks)}`
 							: "Crack a can"}
 					</CardTitle>
 					{isBuffActive ? (
@@ -581,6 +640,7 @@ interface ShopCardProps {
 	game: GameSnapshot;
 	isSaving: boolean;
 	isSmartStockerEnabled: boolean;
+	onBuyAscensionNode: (nodeId: string) => void;
 	onBuyProducer: (producerId: ProducerId) => void;
 	onBuyUpgrade: (upgradeId: string) => void;
 	onChangeBuyQuantity: (quantity: BuyQuantity) => void;
@@ -593,6 +653,7 @@ const ShopCard = ({
 	game,
 	isSaving,
 	isSmartStockerEnabled,
+	onBuyAscensionNode,
 	onBuyProducer,
 	onBuyUpgrade,
 	onChangeBuyQuantity,
@@ -636,6 +697,17 @@ const ShopCard = ({
 			}
 		},
 		[onPickDraft]
+	);
+
+	const handleAscensionClick = useCallback(
+		(event: MouseEvent<HTMLButtonElement>) => {
+			const { dataset } = event.currentTarget;
+			const { ascensionId } = dataset;
+			if (ascensionId) {
+				onBuyAscensionNode(ascensionId);
+			}
+		},
+		[onBuyAscensionNode]
 	);
 
 	return (
@@ -835,7 +907,11 @@ const ShopCard = ({
 						{GOLDEN_UPGRADES.map((upgrade) => {
 							const rank = game.goldenUpgrades[upgrade.id];
 							const cost = goldenUpgradeCost(upgrade.id, rank);
-							const isUnlocked = game.prestigeLevel >= upgrade.unlockLevel;
+							const unlockLevel = goldenUpgradeUnlockLevel(
+								upgrade,
+								game.ascensionNodes
+							);
+							const isUnlocked = game.prestigeLevel >= unlockLevel;
 							const isMaxed = rank >= upgrade.maxRank;
 							return (
 								<li
@@ -847,7 +923,7 @@ const ShopCard = ({
 										<p className="text-muted-foreground">
 											{isUnlocked
 												? upgrade.description
-												: `Unlocks at prestige ${upgrade.unlockLevel}`}
+												: `Unlocks at prestige ${unlockLevel}`}
 										</p>
 										<p className="text-muted-foreground">
 											Rank {rank}/{upgrade.maxRank}
@@ -867,6 +943,73 @@ const ShopCard = ({
 										variant="secondary"
 									>
 										{isMaxed ? "Max" : `${formatGameNumber(cost)} golden`}
+									</Button>
+								</li>
+							);
+						})}
+					</ul>
+				</section>
+
+				<section className="flex flex-col gap-2">
+					<div className="flex items-center justify-between gap-2">
+						<h2 className="font-display text-base uppercase tracking-wide">
+							Ascension
+						</h2>
+						<span className="text-monster-gold tabular-nums">
+							{Math.floor(game.ascensionSparks)} ⚡
+						</span>
+					</div>
+					<p className="text-muted-foreground">
+						Permanent tree nodes. Sparks are earned on prestige and never reset.
+					</p>
+					<ul className="flex flex-col gap-2">
+						{ASCENSION_NODES.map((node) => {
+							const nodeId = node.id as AscensionNodeId;
+							const rank = game.ascensionNodes[nodeId] ?? 0;
+							const cost = ascensionNodeCost(nodeId, rank);
+							const isMaxed = rank >= node.maxRank;
+							const isUnlocked = ascensionNodeUnlocked(
+								game.ascensionNodes,
+								node
+							);
+							const requiredNode = node.requiredNode
+								? ASCENSION_NODES.find(
+										(entry) => entry.id === node.requiredNode
+									)
+								: undefined;
+							return (
+								<li
+									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+									key={node.id}
+								>
+									<div>
+										<h3 className="font-medium">
+											{node.name}
+											{rank > 0 ? ` · Rank ${rank}/${node.maxRank}` : ""}
+										</h3>
+										<p className="text-muted-foreground">
+											{isUnlocked
+												? node.description
+												: `Requires ${requiredNode?.name ?? node.requiredNode} rank ${node.requiredRank ?? 1}`}
+										</p>
+									</div>
+									<Button
+										data-ascension-id={node.id}
+										disabled={
+											isSaving ||
+											!isUnlocked ||
+											isMaxed ||
+											game.ascensionSparks < cost
+										}
+										onClick={handleAscensionClick}
+										size="sm"
+										variant={
+											isUnlocked && !isMaxed && game.ascensionSparks >= cost
+												? "default"
+												: "outline"
+										}
+									>
+										{isMaxed ? "Max" : `${cost} ⚡`}
 									</Button>
 								</li>
 							);
@@ -1012,6 +1155,89 @@ const AchievementsCard = ({ game }: AchievementsCardProps) => {
 	);
 };
 
+const COOLANT_TEASER_THRESHOLD = WALLS[0].threshold / 10;
+
+interface CoolantCardProps {
+	game: GameSnapshot;
+	isSaving: boolean;
+	onBuyCoolingTower: () => void;
+	onVentWall: () => void;
+}
+
+const CoolantCard = ({
+	game,
+	isSaving,
+	onBuyCoolingTower,
+	onVentWall,
+}: CoolantCardProps) => {
+	const wall = activeWall(game);
+	const towerCost = coolingTowerCost(game.coolantTowers);
+	const isVisible =
+		wall !== null ||
+		game.coolant > 0 ||
+		game.coolantTowers > 0 ||
+		game.runCans >= COOLANT_TEASER_THRESHOLD;
+	if (!isVisible) {
+		return null;
+	}
+	const coolantRate = coolantPerSecond(game);
+	return (
+		<Card className="order-6 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Coolant
+				</CardTitle>
+				<CardDescription>
+					{wall
+						? wall.description
+						: "Cooling towers produce coolant for the walls ahead."}
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="flex flex-col gap-3">
+				{wall ? (
+					<div className="bg-destructive/10 p-3">
+						<h3 className="font-bold text-destructive">{wall.name} active</h3>
+						<Button
+							className="mt-2 w-full"
+							data-wall-id={wall.id}
+							disabled={isSaving || game.coolant < wall.ventCost}
+							onClick={onVentWall}
+							variant={game.coolant >= wall.ventCost ? "default" : "outline"}
+						>
+							Vent for {formatGameNumber(wall.ventCost)} coolant
+						</Button>
+					</div>
+				) : null}
+				<div className="flex items-baseline justify-between gap-2">
+					<span className="font-bold">Coolant</span>
+					<span className="tabular-nums">
+						{formatGameNumber(game.coolant)}
+						{coolantRate > 0 ? ` (+${formatGameNumber(coolantRate)}/s)` : ""}
+					</span>
+				</div>
+				<div className="flex items-center justify-between gap-3 bg-muted/30 p-3">
+					<div>
+						<h3 className="font-medium">Cooling Tower</h3>
+						<p className="text-muted-foreground">
+							{game.coolantTowers} owned ·{" "}
+							{formatGameNumber(COOLANT_PER_TOWER_PER_SEC)} coolant/s each
+						</p>
+					</div>
+					<Button
+						data-cooling-tower=""
+						disabled={isSaving || game.cans < towerCost}
+						onClick={onBuyCoolingTower}
+						size="sm"
+						variant={game.cans >= towerCost ? "default" : "outline"}
+					>
+						{formatGameNumber(towerCost)}
+					</Button>
+				</div>
+			</CardContent>
+		</Card>
+	);
+};
+
 interface CodexCardProps {
 	game: GameSnapshot;
 }
@@ -1023,7 +1249,7 @@ const CodexCard = ({ game }: CodexCardProps) => {
 		(collectionMultiplier(game.collection) - 1) * 100
 	);
 	return (
-		<Card className="order-6 self-start xl:col-start-1">
+		<Card className="order-7 self-start xl:col-start-1">
 			<CardHeader>
 				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
 					Codex
@@ -1208,6 +1434,9 @@ export const MonsterGame = () => {
 	const { mutateAsync: pickDraftMutation } = useMutation(
 		trpc.game.pickDraft.mutationOptions()
 	);
+	const { mutateAsync: buyAscensionNodeMutation } = useMutation(
+		trpc.game.buyAscensionNode.mutationOptions()
+	);
 	const { mutateAsync: triggerFrenzyMutation } = useMutation(
 		trpc.game.triggerFrenzy.mutationOptions()
 	);
@@ -1216,6 +1445,12 @@ export const MonsterGame = () => {
 	);
 	const { mutateAsync: claimGoldenRushMutation } = useMutation(
 		trpc.game.claimGoldenRush.mutationOptions()
+	);
+	const { mutateAsync: buyCoolingTowerMutation } = useMutation(
+		trpc.game.buyCoolingTower.mutationOptions()
+	);
+	const { mutateAsync: ventWallMutation } = useMutation(
+		trpc.game.ventWall.mutationOptions()
 	);
 
 	const updateGame = useCallback(
@@ -1279,6 +1514,36 @@ export const MonsterGame = () => {
 			});
 		}
 	}, [game]);
+
+	const wall = game ? activeWall(game) : null;
+	const activeWallId = wall ? wall.id : null;
+	const lastActiveWallIdRef = useRef<string | null | undefined>(undefined);
+	useEffect(() => {
+		if (lastActiveWallIdRef.current === undefined) {
+			lastActiveWallIdRef.current = activeWallId;
+			return;
+		}
+		if (activeWallId === lastActiveWallIdRef.current) {
+			return;
+		}
+		lastActiveWallIdRef.current = activeWallId;
+		if (!(game && activeWallId)) {
+			return;
+		}
+		const triggeredWall = WALLS.find(({ id }) => id === activeWallId);
+		if (!triggeredWall) {
+			return;
+		}
+		toast.warning(`${triggeredWall.name}!`, {
+			description: triggeredWall.description,
+			duration: 12_000,
+		});
+		track(AnalyticsEvents.game.wallReached, {
+			prestige_level: game.prestigeLevel,
+			run_cans_bucket: bucketCans(game.runCans),
+			wall_id: triggeredWall.id,
+		});
+	}, [activeWallId, game]);
 
 	useEffect(() => {
 		if (isSessionPending || session || anonymousSignInStarted.current) {
@@ -1551,6 +1816,22 @@ export const MonsterGame = () => {
 		[refetchState]
 	);
 
+	const buyCoolingTowerNow = useCallback(
+		() =>
+			performMutation((input) => buyCoolingTowerMutation(input), {
+				action: "buy_cooling_tower",
+			}),
+		[buyCoolingTowerMutation, performMutation]
+	);
+
+	const ventWallNow = useCallback(
+		() =>
+			performMutation((input) => ventWallMutation(input), {
+				action: "vent_wall",
+			}),
+		[performMutation, ventWallMutation]
+	);
+
 	const syncNow = useCallback(
 		() =>
 			performMutation((input) => syncGame(input), {
@@ -1594,6 +1875,18 @@ export const MonsterGame = () => {
 				optionIndex,
 			}),
 		[pickDraftMutation, performMutation]
+	);
+
+	const buyAscensionNodeNow = useCallback(
+		(nodeId: string) =>
+			performMutation(
+				(input) => buyAscensionNodeMutation({ ...input, nodeId }),
+				{
+					action: "buy_ascension_node",
+					nodeId,
+				}
+			),
+		[buyAscensionNodeMutation, performMutation]
 	);
 
 	const triggerFrenzyNow = useCallback(
@@ -1704,7 +1997,9 @@ export const MonsterGame = () => {
 		const frenzyActive = (current.frenzyEndsAt ?? 0) > now;
 		const amount =
 			calculateClickValue(current) *
-			(frenzyActive ? frenzyMultiplier(current) : 1) *
+			(frenzyActive
+				? activeFrenzyMultiplier(current, current.frenzyStacks)
+				: 1) *
 			clickBuffMultiplier(current, now);
 		if (milestone) {
 			track(AnalyticsEvents.game.clickMilestone, {
@@ -1714,11 +2009,18 @@ export const MonsterGame = () => {
 				prestige_level: current.prestigeLevel,
 			});
 		}
-		const triggersFrenzy = !frenzyActive && current.nextFrenzyClick <= 1;
+		const canStackFrenzy =
+			frenzyActive &&
+			current.ascensionNodes["frenzy-stacking"] > 0 &&
+			current.frenzyStacks < MAX_FRENZY_STACKS;
+		const triggersFrenzy =
+			(!frenzyActive && current.nextFrenzyClick <= 1) ||
+			(canStackFrenzy && current.nextFrenzyClick <= 1);
 		updateGame((state) => {
-			const nextFrenzyClick = frenzyActive
-				? state.nextFrenzyClick
-				: Math.max(0, state.nextFrenzyClick - 1);
+			const nextFrenzyClick =
+				frenzyActive && !canStackFrenzy
+					? state.nextFrenzyClick
+					: Math.max(0, state.nextFrenzyClick - 1);
 			return {
 				...state,
 				bestRunCans: clampGameValue(
@@ -1726,8 +2028,15 @@ export const MonsterGame = () => {
 				),
 				cans: clampGameValue(state.cans + amount),
 				frenzyEndsAt: triggersFrenzy
-					? now + frenzyDurationMs(state)
+					? canStackFrenzy
+						? (state.frenzyEndsAt ?? now) + frenzyDurationMs(state)
+						: now + frenzyDurationMs(state)
 					: state.frenzyEndsAt,
+				frenzyStacks: triggersFrenzy
+					? canStackFrenzy
+						? state.frenzyStacks + 1
+						: 1
+					: state.frenzyStacks,
 				lifetimeCans: clampGameValue(state.lifetimeCans + amount),
 				nextFrenzyClick,
 				runCans: clampGameValue(state.runCans + amount),
@@ -1810,9 +2119,21 @@ export const MonsterGame = () => {
 		},
 		[pickDraftNow]
 	);
+	const handleBuyAscensionNode = useCallback(
+		(nodeId: string) => {
+			buyAscensionNodeNow(nodeId).catch(() => undefined);
+		},
+		[buyAscensionNodeNow]
+	);
 	const handleClaimGoldenRush = useCallback(() => {
 		claimGoldenRushNow().catch(() => undefined);
 	}, [claimGoldenRushNow]);
+	const handleBuyCoolingTower = useCallback(() => {
+		buyCoolingTowerNow().catch(() => undefined);
+	}, [buyCoolingTowerNow]);
+	const handleVentWall = useCallback(() => {
+		ventWallNow().catch(() => undefined);
+	}, [ventWallNow]);
 
 	if (isSessionPending || !session || isStateLoading || !game) {
 		return <GameLoading />;
@@ -1848,6 +2169,7 @@ export const MonsterGame = () => {
 				game={game}
 				isSaving={isSaving}
 				isSmartStockerEnabled={isSmartStockerEnabled}
+				onBuyAscensionNode={handleBuyAscensionNode}
 				onBuyProducer={handleBuyProducer}
 				onBuyUpgrade={handleBuyUpgrade}
 				onChangeBuyQuantity={changeBuyQuantity}
@@ -1864,6 +2186,12 @@ export const MonsterGame = () => {
 				viewerId={session.user.id}
 			/>
 			<AchievementsCard game={game} />
+			<CoolantCard
+				game={game}
+				isSaving={isSaving}
+				onBuyCoolingTower={handleBuyCoolingTower}
+				onVentWall={handleVentWall}
+			/>
 			<CodexCard game={game} />
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>

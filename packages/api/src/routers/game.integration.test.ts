@@ -17,7 +17,6 @@ const { connectTestDatabase, deleteTestUsers, seedTestUser } = await import(
 	"@valkoinenmonsterv2/db/test-database"
 );
 const {
-	buyUpgrade,
 	createDefaultGameState,
 	mutateGameStateWithState,
 	pickDraft,

@@ -12,14 +12,22 @@ import {
 import { user } from "./auth";
 
 export const gameState = pgTable("game_state", {
+	ascensionNodes: jsonb("ascension_nodes")
+		.$type<Record<string, number>>()
+		.notNull()
+		.default({}),
+	ascensionSparks: doublePrecision("ascension_sparks").default(0).notNull(),
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
 	collection: jsonb("collection").$type<string[]>().notNull().default([]),
+	coolant: doublePrecision("coolant").default(0).notNull(),
+	coolantTowers: integer("coolant_towers").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
 	draftTier: integer("draft_tier").default(0).notNull(),
 	frenzyEndsAt: timestamp("frenzy_ends_at", { withTimezone: true }),
+	frenzyStacks: integer("frenzy_stacks").default(0).notNull(),
 	goldenCans: doublePrecision("golden_cans").default(0).notNull(),
 	goldenRushBuffEndsAt: timestamp("golden_rush_buff_ends_at", {
 		withTimezone: true,
@@ -45,6 +53,9 @@ export const gameState = pgTable("game_state", {
 	runDraft: jsonb("run_draft").$type<string[]>(),
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
+	totalAscensionSparks: doublePrecision("total_ascension_sparks")
+		.default(0)
+		.notNull(),
 	totalGoldenCans: doublePrecision("total_golden_cans").default(0).notNull(),
 	unlockedAchievements: jsonb("unlocked_achievements")
 		.$type<string[]>()
@@ -57,6 +68,7 @@ export const gameState = pgTable("game_state", {
 	userId: text("user_id")
 		.primaryKey()
 		.references(() => user.id, { onDelete: "cascade" }),
+	ventedWalls: jsonb("vented_walls").$type<string[]>().notNull().default([]),
 });
 
 export type GameStateRow = typeof gameState.$inferSelect;

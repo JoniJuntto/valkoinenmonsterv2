@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	type AchievementProgress,
+	ASCENSION_NODES,
 	acceptManualClicks,
+	activeFrenzyMultiplier,
+	activeWall,
+	ascensionNodeCost,
+	ascensionNodeUnlocked,
+	ascensionPotential,
+	ascensionReward,
 	bestStockerPurchase,
 	CAN_VARIANTS,
 	COLLECTION_SETS,
@@ -13,10 +21,14 @@ import {
 	collectionMultiplier,
 	collectUnlockedVariants,
 	completedCollectionSets,
+	coolantPerSecond,
+	coolingTowerCost,
 	countUnlockedAchievements,
 	createHeadStartProducers,
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	createStartingRunUpgrades,
 	DRAFT_CARDS,
 	DRAFT_SIZE,
 	derivedCanVariantIds,
@@ -26,13 +38,13 @@ import {
 	formatGameNumber,
 	frenzyDurationMs,
 	frenzyMultiplier,
-	type GameProgress,
 	GOLDEN_RUSH_DROP_CHANCE,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_RUSH_MIN_DELAY_MS,
 	GOLDEN_UPGRADES,
 	goldenCanPotential,
 	goldenUpgradeCost,
+	goldenUpgradeUnlockLevel,
 	isProducerId,
 	luckyCanGain,
 	MAX_GAME_VALUE,
@@ -52,14 +64,88 @@ import {
 	rollGoldenRushReward,
 	unionCollection,
 	unlockedAchievementIds,
+	WALLS,
 } from "./game";
 
-const createProgress = (): GameProgress => ({
+const createProgress = (): AchievementProgress => ({
 	collection: [],
 	goldenUpgrades: createInitialGoldenUpgrades(),
+	prestigeLevel: 0,
 	producers: createInitialProducers(),
 	runUpgrades: [],
 	totalGoldenCans: 0,
+});
+
+describe("ascension layer", () => {
+	test("derives sparks from total golden cans without re-farming", () => {
+		expect(ascensionPotential(0)).toBe(0);
+		expect(ascensionPotential(24)).toBe(0);
+		expect(ascensionPotential(25)).toBe(1);
+		expect(ascensionPotential(100)).toBe(2);
+		expect(ascensionPotential(2500)).toBe(10);
+		expect(ascensionReward(24, 0)).toBe(0);
+		expect(ascensionReward(100, 0)).toBe(2);
+		expect(ascensionReward(100, 2)).toBe(0);
+		expect(ascensionReward(2500, 2)).toBe(8);
+	});
+
+	test("prices and gates ascension nodes", () => {
+		const findNode = (id: string) => {
+			const node = ASCENSION_NODES.find((entry) => entry.id === id);
+			if (!node) {
+				throw new Error(`Missing node: ${id}`);
+			}
+			return node;
+		};
+		const nodes = createInitialAscensionNodes();
+		expect(ascensionNodeCost("second-nature", 0)).toBe(1);
+		expect(ascensionNodeCost("second-nature", 2)).toBe(4);
+		expect(ascensionNodeCost("master-key", 1)).toBe(4);
+		expect(ascensionNodeCost("second-wind", 0)).toBe(5);
+		expect(ascensionNodeUnlocked(nodes, findNode("second-nature"))).toBe(true);
+		expect(ascensionNodeUnlocked(nodes, findNode("second-wind"))).toBe(false);
+		nodes["second-nature"] = 1;
+		expect(ascensionNodeUnlocked(nodes, findNode("second-wind"))).toBe(true);
+		expect(ascensionNodeUnlocked(nodes, findNode("frenzy-stacking"))).toBe(
+			false
+		);
+		nodes["master-key"] = 1;
+		expect(ascensionNodeUnlocked(nodes, findNode("frenzy-stacking"))).toBe(
+			true
+		);
+	});
+
+	test("second nature starts runs with cheap non-milestone upgrades", () => {
+		const nodes = createInitialAscensionNodes();
+		expect(createStartingRunUpgrades(nodes)).toEqual([]);
+		nodes["second-nature"] = 2;
+		expect(createStartingRunUpgrades(nodes)).toEqual(["cold-can", "firm-grip"]);
+	});
+
+	test("master key lowers golden upgrade prestige gates", () => {
+		const nodes = createInitialAscensionNodes();
+		expect(goldenUpgradeUnlockLevel({ unlockLevel: 2 }, nodes)).toBe(2);
+		nodes["master-key"] = 1;
+		expect(goldenUpgradeUnlockLevel({ unlockLevel: 2 }, nodes)).toBe(1);
+		nodes["master-key"] = 5;
+		expect(goldenUpgradeUnlockLevel({ unlockLevel: 2 }, nodes)).toBe(1);
+	});
+
+	test("stacked frenzies double the frenzy multiplier", () => {
+		const progress = createProgress();
+		expect(activeFrenzyMultiplier(progress, 1)).toBe(10);
+		expect(activeFrenzyMultiplier(progress, 2)).toBe(20);
+		progress.goldenUpgrades["frenzy-core"] = 2;
+		expect(activeFrenzyMultiplier(progress, 2)).toBe(40);
+	});
+
+	test("extends production time by the stacked frenzy boost", () => {
+		const progress = createProgress();
+		expect(productionTimeMs(progress, 10_000, 4000, 0, 1, 1)).toBe(46_000);
+		expect(productionTimeMs(progress, 10_000, 4000, 0, 1, 2)).toBe(86_000);
+		progress.producers["mini-fridge"] = 1;
+		expect(calculateIdleGain(progress, 10_000, 4000, 1, 0, 1, 2)).toBe(86);
+	});
 });
 
 describe("Monster game economy", () => {
@@ -422,6 +508,77 @@ describe("validated accrual", () => {
 		expect(calculateIdleGain(progress, 10_000, 2000, 1)).toBe(28);
 		expect(calculateIdleGain(progress, 10_000, 2000, 2)).toBe(56);
 		expect(calculateIdleGain(progress, 10_000, 2000, 0.1)).toBeCloseTo(2.8);
+	});
+});
+
+describe("walls and coolant", () => {
+	test("activates walls in order as runCans crosses each checkpoint", () => {
+		const progress = { ...createProgress(), runCans: 0, ventedWalls: [] };
+		expect(activeWall(progress)).toBeNull();
+		const overheated = { ...progress, runCans: 1e12 };
+		expect(activeWall(overheated)?.id).toBe("overheat");
+		const siphoned = {
+			...overheated,
+			runCans: 1e15,
+			ventedWalls: ["overheat"],
+		};
+		expect(activeWall(siphoned)?.id).toBe("siphon");
+		const blackedOut = {
+			...siphoned,
+			runCans: 1e18,
+			ventedWalls: ["overheat", "siphon"],
+		};
+		expect(activeWall(blackedOut)?.id).toBe("blackout");
+		expect(
+			activeWall({
+				...blackedOut,
+				ventedWalls: ["overheat", "siphon", "blackout"],
+			})
+		).toBeNull();
+	});
+
+	test("halves production while overheated and restores it after venting", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		expect(calculateCps(progress)).toBe(1);
+		const overheated = { ...progress, runCans: 1e12, ventedWalls: [] };
+		expect(calculateCps(overheated)).toBe(0.5);
+		expect(calculateCps({ ...overheated, ventedWalls: ["overheat"] })).toBe(1);
+	});
+
+	test("never stacks wall penalties — the first un-vented wall rules", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		const skippedAhead = { ...progress, runCans: 1e18, ventedWalls: [] };
+		expect(calculateCps(skippedAhead)).toBe(0.5);
+		// Siphon is not active while Overheat blocks it, so towers run at full rate.
+		expect(coolantPerSecond({ ...skippedAhead, coolantTowers: 4 })).toBe(2);
+	});
+
+	test("produces coolant per tower and throttles it during the siphon", () => {
+		const progress = { ...createProgress(), runCans: 1e12, ventedWalls: [] };
+		expect(coolantPerSecond({ ...progress, coolantTowers: 0 })).toBe(0);
+		expect(coolantPerSecond({ ...progress, coolantTowers: 3 })).toBe(1.5);
+		const siphoned = {
+			...progress,
+			runCans: 1e15,
+			ventedWalls: ["overheat"],
+		};
+		expect(coolantPerSecond({ ...siphoned, coolantTowers: 3 })).toBeCloseTo(
+			0.375
+		);
+	});
+
+	test("prices cooling towers on the producer curve", () => {
+		expect(coolingTowerCost(0)).toBe(200_000_000_000);
+		expect(coolingTowerCost(1)).toBe(229_999_999_999);
+		expect(
+			WALLS.map(({ id, threshold, ventCost }) => ({ id, threshold, ventCost }))
+		).toEqual([
+			{ id: "overheat", threshold: 1e12, ventCost: 100 },
+			{ id: "siphon", threshold: 1e15, ventCost: 1000 },
+			{ id: "blackout", threshold: 1e18, ventCost: 25_000 },
+		]);
 	});
 });
 
