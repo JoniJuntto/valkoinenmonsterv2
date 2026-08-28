@@ -23,8 +23,10 @@ import {
 	goldenUpgradeCost,
 	luckyCanGain,
 	MAX_GAME_VALUE,
+	MAX_PERSISTED_COUNTER,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
+	PRODUCERS,
 	prestigeReward,
 	producerBulkCost,
 	producerCost,
@@ -67,6 +69,13 @@ describe("Monster game economy", () => {
 		progress.producers["pull-tab"] = 20;
 		expect(cheapestAffordableProducer(progress, 100)).toBe("mini-fridge");
 		expect(cheapestAffordableProducer(progress, 99)).toBeNull();
+	});
+
+	test("keeps each producer base price within ten minutes of base output", () => {
+		for (const producer of PRODUCERS) {
+			expect(producer.baseCost / producer.baseCps).toBeLessThanOrEqual(600);
+		}
+		expect(producerCost("the-beast", 0)).toBe(1_680_000_000_000_000);
 	});
 
 	test("doubles click power per click upgrade instead of spiking 10×", () => {
@@ -126,6 +135,30 @@ describe("Monster game economy", () => {
 		expect(prestigeReward(9_000_000, 5)).toBe(0);
 		expect(nextGoldenCanRequirement(0)).toBe(1_000_000);
 		expect(nextGoldenCanRequirement(2)).toBe(9_000_000);
+		expect(prestigeReward(9_000_000, 2.9)).toBe(1);
+		expect(nextGoldenCanRequirement(2.9)).toBe(9_000_000);
+	});
+
+	test("paces global and cps-click upgrades on regular cost steps", () => {
+		const flavorCosts = RUN_UPGRADES.filter(
+			({ kind }) => kind === "flavor"
+		).map(({ cost }) => cost);
+		for (let index = 1; index < flavorCosts.length; index += 1) {
+			expect(flavorCosts[index]).toBe((flavorCosts[index - 1] ?? 0) * 10);
+		}
+
+		const cpsClickCosts = RUN_UPGRADES.filter(
+			({ kind }) => kind === "cps-click"
+		).map(({ cost }) => cost);
+		for (let index = 1; index < cpsClickCosts.length; index += 1) {
+			expect(cpsClickCosts[index]).toBe((cpsClickCosts[index - 1] ?? 0) * 20);
+		}
+	});
+
+	test("never grants already-collected prestige potential", () => {
+		expect(prestigeReward(9_000_000, 3)).toBe(0);
+		expect(prestigeReward(9_000_000, 4)).toBe(0);
+		expect(goldenCanPotential(MAX_GAME_VALUE)).toBe(MAX_PERSISTED_COUNTER);
 	});
 
 	test("prices golden upgrades linearly by rank", () => {
@@ -174,6 +207,8 @@ describe("Monster game economy", () => {
 		}
 		expect(producerBulkCost("pull-tab", 0, 10)).toBe(expected);
 		expect(producerBulkCost("pull-tab", 0, 1)).toBe(15);
+		expect(producerBulkCost("pull-tab", 0, -1)).toBe(0);
+		expect(producerBulkCost("pull-tab", 0, 1.9)).toBe(15);
 	});
 
 	test("stocks head-start producers for the classic lineup only", () => {
@@ -246,6 +281,9 @@ describe("golden can rush", () => {
 	});
 
 	test("clamps and formats large values", () => {
+		expect(clampGameValue(MAX_GAME_VALUE - 1)).toBe(MAX_GAME_VALUE - 1);
+		expect(clampGameValue(MAX_GAME_VALUE)).toBe(MAX_GAME_VALUE);
+		expect(clampGameValue(MAX_GAME_VALUE * 2)).toBe(MAX_GAME_VALUE);
 		expect(clampGameValue(Number.POSITIVE_INFINITY)).toBe(MAX_GAME_VALUE);
 		expect(clampGameValue(Number.NEGATIVE_INFINITY)).toBe(0);
 		expect(clampGameValue(Number.NaN)).toBe(0);

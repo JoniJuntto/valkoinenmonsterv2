@@ -5,12 +5,34 @@ import { Pool } from "pg";
 
 import { shouldTransferAnonymousSave } from "./game-save";
 import { getPgPoolConfig } from "./pg-config";
-import * as schema from "./schema";
+import {
+	account,
+	accountRelations,
+	session,
+	sessionRelations,
+	user,
+	userRelations,
+	verification,
+} from "./schema/auth";
 import { gameState } from "./schema/game";
 
-export { shouldTransferAnonymousSave } from "./game-save";
+const schema = {
+	account,
+	accountRelations,
+	gameState,
+	session,
+	sessionRelations,
+	user,
+	userRelations,
+	verification,
+};
 
 let pool: Pool | undefined;
+
+const createDrizzleDatabase = (databasePool: Pool) =>
+	drizzle(databasePool, { schema });
+
+export type Database = ReturnType<typeof createDrizzleDatabase>;
 
 function getPool() {
 	if (!pool) {
@@ -21,13 +43,21 @@ function getPool() {
 }
 
 export function createDb() {
-	return drizzle(getPool(), { schema });
+	return createDrizzleDatabase(getPool());
 }
+
+export const createDatabaseConnection = (databaseUrl: string) => {
+	const connectionPool = new Pool(getPgPoolConfig(databaseUrl));
+	return {
+		close: () => connectionPool.end(),
+		database: createDrizzleDatabase(connectionPool),
+	};
+};
 
 export const db = createDb();
 
 export const transferBestGameState = async (
-	database: ReturnType<typeof createDb>,
+	database: Database,
 	anonymousUserId: string,
 	registeredUserId: string
 ) => {
