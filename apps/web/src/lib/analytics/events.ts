@@ -40,6 +40,7 @@ export const AnalyticsEvents = {
 		logoClicked: "nav.logo_clicked",
 	},
 	season: {
+		bannerClicked: "game.season.banner_clicked",
 		purchaseProducer: "game.season.purchase.producer",
 		purchaseUpgrade: "game.season.purchase.upgrade",
 		tap: "game.season.tap",

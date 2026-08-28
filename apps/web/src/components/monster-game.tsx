@@ -50,7 +50,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
-import { SeasonPanel } from "@/components/season-panel";
+import { SeasonBanner, SeasonPanel } from "@/components/season-panel";
 import {
 	bucketCans,
 	bucketCps,
@@ -1510,6 +1510,7 @@ export const MonsterGame = () => {
 				isFrenzyActive && "is-frenzy"
 			)}
 		>
+			<SeasonBanner />
 			<StatsCard
 				clicksPerSecond={clicksPerSecond}
 				game={game}

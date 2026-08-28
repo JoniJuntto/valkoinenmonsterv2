@@ -44,6 +44,60 @@ interface SeasonPanelProps {
 	viewerId: string;
 }
 
+const useNowTick = (intervalMs: number): number => {
+	const [nowMs, setNowMs] = useState(() => Date.now());
+	useEffect(() => {
+		const timer = window.setInterval(() => setNowMs(Date.now()), intervalMs);
+		return () => window.clearInterval(timer);
+	}, [intervalMs]);
+	return nowMs;
+};
+
+const SEASON_CARD_ID = "season-event";
+
+export const SeasonBanner = () => {
+	const trpc = useTRPC();
+	const overviewQuery = useQuery({
+		...trpc.season.current.queryOptions(),
+		refetchInterval: 30_000,
+	});
+	const overview = overviewQuery.data;
+	const nowMs = useNowTick(1000);
+	if (!overview) {
+		return null;
+	}
+	const { season, viewerRank } = overview;
+	return (
+		<a
+			className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 xl:col-span-3"
+			href={`#${SEASON_CARD_ID}`}
+			onClick={() => {
+				track(AnalyticsEvents.season.bannerClicked, {
+					season_id: season.id,
+					theme_id: season.themeId,
+				});
+			}}
+		>
+			<span className="flex min-w-0 items-center gap-2">
+				<span
+					aria-hidden
+					className="size-2 shrink-0 animate-pulse rounded-full bg-amber-400"
+				/>
+				<span className="font-display truncate text-sm uppercase leading-none tracking-wide">
+					{season.name} live
+				</span>
+				<span className="hidden text-muted-foreground text-sm sm:inline">
+					· fixed rules, no golden upgrades
+				</span>
+			</span>
+			<span className="shrink-0 text-right text-sm tabular-nums">
+				{viewerRank !== null && `You're #${viewerRank} · `}
+				ends in {formatCountdown(season.endsAt - nowMs)}
+			</span>
+		</a>
+	);
+};
+
 export const SeasonPanel = ({ isAnonymous, viewerId }: SeasonPanelProps) => {
 	const trpc = useTRPC();
 	const overviewQuery = useQuery({
@@ -64,18 +118,13 @@ export const SeasonPanel = ({ isAnonymous, viewerId }: SeasonPanelProps) => {
 	const [snapshot, setSnapshot] = useState<SeasonSnapshot | null>(null);
 	const pendingTapsRef = useRef(0);
 	const viewedTrackedRef = useRef(false);
-	const [nowMs, setNowMs] = useState(() => Date.now());
+	const nowMs = useNowTick(1000);
 
 	useEffect(() => {
 		if (overview) {
 			setSnapshot(overview.snapshot);
 		}
 	}, [overview]);
-
-	useEffect(() => {
-		const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
-		return () => window.clearInterval(timer);
-	}, []);
 
 	useEffect(() => {
 		if (!(overview && viewedTrackedRef.current === false)) {
@@ -175,7 +224,7 @@ export const SeasonPanel = ({ isAnonymous, viewerId }: SeasonPanelProps) => {
 	};
 
 	return (
-		<Card className="order-6 self-start">
+		<Card className="order-6 self-start scroll-mt-4" id={SEASON_CARD_ID}>
 			<CardHeader>
 				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
 					Season Event: {season.name}
@@ -322,7 +371,7 @@ export const SeasonPanel = ({ isAnonymous, viewerId }: SeasonPanelProps) => {
 };
 
 const SeasonPanelSkeleton = () => (
-	<Card className="order-6 self-start">
+	<Card className="order-6 self-start scroll-mt-4" id={SEASON_CARD_ID}>
 		<CardHeader>
 			<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
 				Season Event
