@@ -87,6 +87,20 @@ const CAN_IMAGES = {
 	},
 } as const;
 
+// ponytail: classic Konami code, swipe gestures if anyone actually asks
+const KONAMI_SEQUENCE = [
+	"ArrowUp",
+	"ArrowUp",
+	"ArrowDown",
+	"ArrowDown",
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowLeft",
+	"ArrowRight",
+	"b",
+	"a",
+] as const;
+
 const formatElapsedTime = (elapsedMs: number): string => {
 	const totalSeconds = Math.floor(elapsedMs / 1000);
 	const hours = Math.floor(totalSeconds / 3600);
@@ -266,6 +280,19 @@ const selectVisibleRunUpgrades = (
 	return visible;
 };
 
+const selectCanImage = (
+	isEsMode: boolean,
+	isMegisActive: boolean,
+	isFrenzyActive: boolean
+): string => {
+	if (isMegisActive) {
+		return "/valkoinenmegis.webp";
+	}
+	return CAN_IMAGES[isEsMode ? "es" : "monster"][
+		isFrenzyActive ? "frenzy" : "regular"
+	];
+};
+
 const GameLoading = () => (
 	<main className="grid gap-4 px-4 pb-8 md:grid-cols-3">
 		{["stats", "can", "shop"].map((name) => (
@@ -398,6 +425,7 @@ interface CanCardProps {
 	clickLabels: ClickLabel[];
 	game: GameSnapshot;
 	isEsMode: boolean;
+	isMegisActive: boolean;
 	isMuted: boolean;
 	onClick: () => void;
 	onToggleEsMode: () => void;
@@ -407,6 +435,7 @@ interface CanCardProps {
 const CanCard = ({
 	game,
 	isEsMode,
+	isMegisActive,
 	isMuted,
 	onClick,
 	onToggleEsMode,
@@ -415,10 +444,7 @@ const CanCard = ({
 }: CanCardProps) => {
 	const now = game.serverNow;
 	const isFrenzyActive = (game.frenzyEndsAt ?? 0) > now;
-	const canImage =
-		CAN_IMAGES[isEsMode ? "es" : "monster"][
-			isFrenzyActive ? "frenzy" : "regular"
-		];
+	const canImage = selectCanImage(isEsMode, isMegisActive, isFrenzyActive);
 	const frenzySeconds = isFrenzyActive
 		? Math.max(0, ((game.frenzyEndsAt ?? now) - now) / 1000)
 		: 0;
@@ -944,6 +970,8 @@ export const MonsterGame = () => {
 	const clickLabelIdRef = useRef(0);
 	const clickLabelTimeoutsRef = useRef(new Set<number>());
 	const [isEsMode, setIsEsMode] = useState(false);
+	const [isMegisActive, setIsMegisActive] = useState(false);
+	const konamiIndexRef = useRef(0);
 	const [isMuted, setIsMuted] = useState(() =>
 		typeof window === "undefined"
 			? false
@@ -1117,6 +1145,28 @@ export const MonsterGame = () => {
 	useEffect(() => {
 		window.localStorage.setItem("monster-muted", String(isMuted));
 	}, [isMuted]);
+
+	useEffect(() => {
+		const handleKeyDown = (event: KeyboardEvent) => {
+			const expected = KONAMI_SEQUENCE[konamiIndexRef.current];
+			const pressed =
+				event.key.length === 1 ? event.key.toLowerCase() : event.key;
+			if (pressed === expected) {
+				konamiIndexRef.current += 1;
+				if (konamiIndexRef.current === KONAMI_SEQUENCE.length) {
+					konamiIndexRef.current = 0;
+					setIsMegisActive((active) => {
+						toast(active ? "Monster is back" : "MEGIS MODE");
+						return !active;
+					});
+				}
+				return;
+			}
+			konamiIndexRef.current = pressed === KONAMI_SEQUENCE[0] ? 1 : 0;
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, []);
 
 	useEffect(() => {
 		window.localStorage.setItem(
@@ -1536,6 +1586,7 @@ export const MonsterGame = () => {
 				clickLabels={clickLabels}
 				game={game}
 				isEsMode={isEsMode}
+				isMegisActive={isMegisActive}
 				isMuted={isMuted}
 				onClick={clickCan}
 				onToggleEsMode={toggleEsMode}
