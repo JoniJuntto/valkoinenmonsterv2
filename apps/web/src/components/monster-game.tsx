@@ -5,7 +5,6 @@ import {
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
-	calculateIdleGain,
 	cheapestAffordableProducer,
 	clampGameValue,
 	clickBuffMultiplier,
@@ -15,13 +14,11 @@ import {
 	frenzyMultiplier,
 	type GameSnapshot,
 	GOLDEN_CAN_BASE,
-	GOLDEN_RUSH_VISIBLE_MS,
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
 	goldenUpgradeCost,
 	isGoldenUpgradeId,
 	nextGoldenCanRequirement,
-	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
 	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
@@ -67,6 +64,12 @@ import {
 	trackError,
 } from "@/lib/analytics/track";
 import { authClient } from "@/lib/auth-client";
+import {
+	isGoldenRushVisible,
+	projectElapsed,
+	reconcileMutationFailure,
+	reconcileMutationSuccess,
+} from "@/lib/game-reconciliation";
 import { useTRPC } from "@/utils/trpc";
 
 const HEARTBEAT_MS = 5000;
@@ -201,80 +204,6 @@ const trackMutationSuccess = (
 		default:
 			break;
 	}
-};
-
-const projectElapsed = (snapshot: GameSnapshot, now: number): GameSnapshot => {
-	const elapsedMs = Math.max(0, now - snapshot.lastAccruedAt);
-	if (elapsedMs === 0) {
-		return snapshot;
-	}
-	const frenzyEnd = snapshot.frenzyEndsAt ?? 0;
-	const frenzyMs = Math.max(
-		0,
-		Math.min(now, frenzyEnd) - snapshot.lastAccruedAt
-	);
-	const buffEnd =
-		snapshot.goldenRushBuffKind === "production_frenzy"
-			? (snapshot.goldenRushBuffEndsAt ?? 0)
-			: 0;
-	const buffMs = Math.max(0, Math.min(now, buffEnd) - snapshot.lastAccruedAt);
-	const gain = calculateIdleGain(
-		snapshot,
-		elapsedMs,
-		frenzyMs,
-		elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS
-			? offlineProductionMultiplier(snapshot)
-			: 1,
-		buffMs,
-		PRODUCTION_FRENZY_MULTIPLIER
-	);
-	return {
-		...snapshot,
-		bestRunCans: clampGameValue(
-			Math.max(snapshot.bestRunCans, snapshot.runCans + gain)
-		),
-		cans: clampGameValue(snapshot.cans + gain),
-		lastAccruedAt: now,
-		lifetimeCans: clampGameValue(snapshot.lifetimeCans + gain),
-		runCans: clampGameValue(snapshot.runCans + gain),
-		serverNow: now,
-	};
-};
-
-const projectPendingClicks = (
-	snapshot: GameSnapshot,
-	now: number,
-	pendingClicks: number
-): GameSnapshot => {
-	let projected = projectElapsed(snapshot, now);
-	if (pendingClicks === 0) {
-		return projected;
-	}
-	const isFrenzyActive = (projected.frenzyEndsAt ?? 0) > now;
-	const gain =
-		pendingClicks *
-		calculateClickValue(projected) *
-		(isFrenzyActive ? frenzyMultiplier(projected) : 1) *
-		clickBuffMultiplier(projected, now);
-	let { frenzyEndsAt, nextFrenzyClick } = projected;
-	if (!isFrenzyActive && pendingClicks >= nextFrenzyClick) {
-		nextFrenzyClick = 0;
-		frenzyEndsAt = now + frenzyDurationMs(projected);
-	} else if (!isFrenzyActive) {
-		nextFrenzyClick -= pendingClicks;
-	}
-	projected = {
-		...projected,
-		bestRunCans: clampGameValue(
-			Math.max(projected.bestRunCans, projected.runCans + gain)
-		),
-		cans: clampGameValue(projected.cans + gain),
-		frenzyEndsAt,
-		lifetimeCans: clampGameValue(projected.lifetimeCans + gain),
-		nextFrenzyClick,
-		runCans: clampGameValue(projected.runCans + gain),
-	};
-	return projected;
 };
 
 const UPGRADES_SHOWN_PER_FAMILY = 2;
@@ -956,11 +885,7 @@ interface GoldenRushCanProps {
 
 const GoldenRushCan = ({ game, onClaim }: GoldenRushCanProps) => {
 	const readyAt = game.goldenRushReadyAt;
-	const isVisible =
-		readyAt !== null &&
-		game.serverNow >= readyAt &&
-		game.serverNow <= readyAt + GOLDEN_RUSH_VISIBLE_MS;
-	if (!isVisible) {
+	if (!(readyAt !== null && isGoldenRushVisible(game))) {
 		return null;
 	}
 	// Deterministic pseudo-random placement so the can holds still between ticks.
@@ -1272,11 +1197,10 @@ export const MonsterGame = () => {
 					pendingManualClicks: sentClicks,
 					revision: current.revision,
 				});
-				const projected = projectPendingClicks(
-					result,
-					Date.now(),
-					pendingClicksRef.current
-				);
+				const projected = reconcileMutationSuccess(result, Date.now(), {
+					queuedDuringRequest: pendingClicksRef.current,
+					sent: sentClicks,
+				});
 				gameRef.current = projected;
 				setGame(projected);
 
@@ -1303,11 +1227,16 @@ export const MonsterGame = () => {
 				}
 				const refreshed = await refetchState();
 				if (refreshed.data) {
-					const projected = projectPendingClicks(
+					const reconciliation = reconcileMutationFailure(
 						refreshed.data,
 						Date.now(),
-						pendingClicksRef.current
+						{
+							queuedDuringRequest: pendingClicksRef.current - sentClicks,
+							sent: sentClicks,
+						}
 					);
+					pendingClicksRef.current = reconciliation.pendingClicks;
+					const { projected } = reconciliation;
 					gameRef.current = projected;
 					setGame(projected);
 				}

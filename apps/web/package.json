@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "test": "bun test src/lib/game-reconciliation.test.ts",
     "serve": "vite preview",
     "start": "srvx serve --prod --static=./dist/client --entry=./dist/server/server.js",
     "dev": "vite dev"
