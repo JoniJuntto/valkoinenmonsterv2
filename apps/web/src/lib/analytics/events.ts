@@ -32,6 +32,7 @@ export const AnalyticsEvents = {
 		prestigeCancelled: "game.prestige.cancelled",
 		prestigeConfirmed: "game.prestige.confirmed",
 		prestigeReady: "game.prestige.ready",
+		purchaseAscensionNode: "game.purchase.ascension_node",
 		purchaseGoldenUpgrade: "game.purchase.golden_upgrade",
 		purchaseProducer: "game.purchase.producer",
 		purchaseProducerAuto: "game.purchase.producer_auto",
