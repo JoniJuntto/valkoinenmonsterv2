@@ -50,6 +50,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { SeasonPanel } from "@/components/season-panel";
 import {
 	bucketCans,
 	bucketCps,
@@ -1536,6 +1537,10 @@ export const MonsterGame = () => {
 			/>
 			<LeaderboardCard
 				entries={leaderboardQuery.data ?? []}
+				isAnonymous={Boolean(session.user.isAnonymous)}
+				viewerId={session.user.id}
+			/>
+			<SeasonPanel
 				isAnonymous={Boolean(session.user.isAnonymous)}
 				viewerId={session.user.id}
 			/>

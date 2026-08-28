@@ -39,6 +39,12 @@ export const AnalyticsEvents = {
 		claimProgress: "nav.claim_progress",
 		logoClicked: "nav.logo_clicked",
 	},
+	season: {
+		purchaseProducer: "game.season.purchase.producer",
+		purchaseUpgrade: "game.season.purchase.upgrade",
+		tap: "game.season.tap",
+		viewed: "game.season.viewed",
+	},
 	ui: {
 		audioToggled: "ui.audio_toggled",
 		buyQuantityChanged: "ui.buy_quantity_changed",
