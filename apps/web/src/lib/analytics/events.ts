@@ -23,6 +23,7 @@ export const AnalyticsEvents = {
 		clickMilestone: "game.click.milestone",
 		codexSetCompleted: "game.codex.set_completed",
 		codexVariantUnlocked: "game.codex.variant_unlocked",
+		coolingTowerPurchased: "game.coolant.tower_purchased",
 		error: "game.error",
 		frenzyEnded: "game.frenzy.ended",
 		frenzyStarted: "game.frenzy.started",
@@ -37,6 +38,8 @@ export const AnalyticsEvents = {
 		purchaseProducer: "game.purchase.producer",
 		purchaseProducerAuto: "game.purchase.producer_auto",
 		purchaseRunUpgrade: "game.purchase.run_upgrade",
+		wallReached: "game.wall.reached",
+		wallVented: "game.wall.vented",
 	},
 	nav: {
 		claimProgress: "nav.claim_progress",

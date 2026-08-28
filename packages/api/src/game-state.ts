@@ -21,6 +21,7 @@ import {
 	isCanVariantId,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
+	isWallId,
 	MAX_FRENZY_STACKS,
 	MAX_GAME_VALUE,
 	MAX_MANUAL_CLICK_BUDGET,
@@ -28,6 +29,7 @@ import {
 	PRODUCERS,
 	PRODUCTION_FRENZY_DURATION_MS,
 	type ProducerCounts,
+	WALLS,
 } from "./game";
 
 export type MutableGameState = Omit<
@@ -111,6 +113,21 @@ const normalizeTimer = (
 		: value;
 };
 
+const normalizeVentedWalls = (value: unknown): string[] => {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const vented = new Set(value.filter(isWallId));
+	const prefix: string[] = [];
+	for (const wall of WALLS) {
+		if (!vented.has(wall.id)) {
+			break;
+		}
+		prefix.push(wall.id);
+	}
+	return prefix;
+};
+
 export const normalizePersistedGameState = (
 	state: GameStateRow,
 	serverNow: Date
@@ -178,6 +195,8 @@ export const normalizePersistedGameState = (
 		bestRunCans,
 		cans,
 		collection: normalizeCollection(state.collection),
+		coolant: clampGameValue(state.coolant),
+		coolantTowers: clampGameCounter(state.coolantTowers),
 		frenzyEndsAt,
 		frenzyStacks: frenzyEndsAt
 			? finiteInteger(state.frenzyStacks, MAX_FRENZY_STACKS)
@@ -217,6 +236,7 @@ export const normalizePersistedGameState = (
 		unlockedAchievements: Array.isArray(state.unlockedAchievements)
 			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
 			: [],
+		ventedWalls: normalizeVentedWalls(state.ventedWalls),
 	};
 };
 
@@ -224,6 +244,21 @@ const invariant = (condition: boolean, message: string): void => {
 	if (!condition) {
 		throw new Error(`Progression invariant failed: ${message}`);
 	}
+};
+
+const assertWallStateInvariants = (state: MutableGameState): void => {
+	invariant(
+		Number.isFinite(state.coolant) &&
+			state.coolant >= 0 &&
+			state.coolant <= MAX_GAME_VALUE,
+		"coolant must be finite and non-negative"
+	);
+	invariant(
+		Number.isInteger(state.coolantTowers) &&
+			state.coolantTowers >= 0 &&
+			state.coolantTowers <= MAX_PERSISTED_COUNTER,
+		"cooling tower count must be valid"
+	);
 };
 
 export const assertProgressionInvariants = (
@@ -314,6 +349,13 @@ export const assertProgressionInvariants = (
 			state.manualClickBudget >= 0 &&
 			state.manualClickBudget <= MAX_MANUAL_CLICK_BUDGET,
 		"manual click budget must be bounded"
+	);
+	assertWallStateInvariants(state);
+	const wallIdOrder = WALLS.map(({ id }) => id);
+	invariant(
+		state.ventedWalls.length <= wallIdOrder.length &&
+			state.ventedWalls.every((id, index) => id === wallIdOrder[index]),
+		"vented walls must be a prefix of the wall catalog"
 	);
 	invariant(
 		Number.isInteger(state.nextFrenzyClick) && state.nextFrenzyClick >= 1,

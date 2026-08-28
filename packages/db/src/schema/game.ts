@@ -20,6 +20,8 @@ export const gameState = pgTable("game_state", {
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
 	collection: jsonb("collection").$type<string[]>().notNull().default([]),
+	coolant: doublePrecision("coolant").default(0).notNull(),
+	coolantTowers: integer("coolant_towers").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
@@ -64,6 +66,7 @@ export const gameState = pgTable("game_state", {
 	userId: text("user_id")
 		.primaryKey()
 		.references(() => user.id, { onDelete: "cascade" }),
+	ventedWalls: jsonb("vented_walls").$type<string[]>().notNull().default([]),
 });
 
 export type GameStateRow = typeof gameState.$inferSelect;

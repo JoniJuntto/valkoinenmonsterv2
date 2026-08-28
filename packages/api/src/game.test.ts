@@ -4,6 +4,7 @@ import {
 	ASCENSION_NODES,
 	acceptManualClicks,
 	activeFrenzyMultiplier,
+	activeWall,
 	ascensionNodeCost,
 	ascensionNodeUnlocked,
 	ascensionPotential,
@@ -19,6 +20,8 @@ import {
 	collectionMultiplier,
 	collectUnlockedVariants,
 	completedCollectionSets,
+	coolantPerSecond,
+	coolingTowerCost,
 	countUnlockedAchievements,
 	createHeadStartProducers,
 	createInitialAscensionNodes,
@@ -57,6 +60,7 @@ import {
 	rollGoldenRushReward,
 	unionCollection,
 	unlockedAchievementIds,
+	WALLS,
 } from "./game";
 
 const createProgress = (): GameProgress => ({
@@ -456,6 +460,77 @@ describe("validated accrual", () => {
 		expect(calculateIdleGain(progress, 10_000, 2000, 1)).toBe(28);
 		expect(calculateIdleGain(progress, 10_000, 2000, 2)).toBe(56);
 		expect(calculateIdleGain(progress, 10_000, 2000, 0.1)).toBeCloseTo(2.8);
+	});
+});
+
+describe("walls and coolant", () => {
+	test("activates walls in order as runCans crosses each checkpoint", () => {
+		const progress = { ...createProgress(), runCans: 0, ventedWalls: [] };
+		expect(activeWall(progress)).toBeNull();
+		const overheated = { ...progress, runCans: 1e12 };
+		expect(activeWall(overheated)?.id).toBe("overheat");
+		const siphoned = {
+			...overheated,
+			runCans: 1e15,
+			ventedWalls: ["overheat"],
+		};
+		expect(activeWall(siphoned)?.id).toBe("siphon");
+		const blackedOut = {
+			...siphoned,
+			runCans: 1e18,
+			ventedWalls: ["overheat", "siphon"],
+		};
+		expect(activeWall(blackedOut)?.id).toBe("blackout");
+		expect(
+			activeWall({
+				...blackedOut,
+				ventedWalls: ["overheat", "siphon", "blackout"],
+			})
+		).toBeNull();
+	});
+
+	test("halves production while overheated and restores it after venting", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		expect(calculateCps(progress)).toBe(1);
+		const overheated = { ...progress, runCans: 1e12, ventedWalls: [] };
+		expect(calculateCps(overheated)).toBe(0.5);
+		expect(calculateCps({ ...overheated, ventedWalls: ["overheat"] })).toBe(1);
+	});
+
+	test("never stacks wall penalties — the first un-vented wall rules", () => {
+		const progress = createProgress();
+		progress.producers["mini-fridge"] = 1;
+		const skippedAhead = { ...progress, runCans: 1e18, ventedWalls: [] };
+		expect(calculateCps(skippedAhead)).toBe(0.5);
+		// Siphon is not active while Overheat blocks it, so towers run at full rate.
+		expect(coolantPerSecond({ ...skippedAhead, coolantTowers: 4 })).toBe(2);
+	});
+
+	test("produces coolant per tower and throttles it during the siphon", () => {
+		const progress = { ...createProgress(), runCans: 1e12, ventedWalls: [] };
+		expect(coolantPerSecond({ ...progress, coolantTowers: 0 })).toBe(0);
+		expect(coolantPerSecond({ ...progress, coolantTowers: 3 })).toBe(1.5);
+		const siphoned = {
+			...progress,
+			runCans: 1e15,
+			ventedWalls: ["overheat"],
+		};
+		expect(coolantPerSecond({ ...siphoned, coolantTowers: 3 })).toBeCloseTo(
+			0.375
+		);
+	});
+
+	test("prices cooling towers on the producer curve", () => {
+		expect(coolingTowerCost(0)).toBe(200_000_000_000);
+		expect(coolingTowerCost(1)).toBe(229_999_999_999);
+		expect(
+			WALLS.map(({ id, threshold, ventCost }) => ({ id, threshold, ventCost }))
+		).toEqual([
+			{ id: "overheat", threshold: 1e12, ventCost: 100 },
+			{ id: "siphon", threshold: 1e15, ventCost: 1000 },
+			{ id: "blackout", threshold: 1e18, ventCost: 25_000 },
+		]);
 	});
 });
 

@@ -17,6 +17,7 @@ import {
 	type AscensionNodeId,
 	acceptManualClicks,
 	activeFrenzyMultiplier,
+	activeWall,
 	ascensionNodeCost,
 	ascensionNodeUnlocked,
 	ascensionPotential,
@@ -29,6 +30,8 @@ import {
 	clampGameCounter,
 	clampGameValue,
 	collectUnlockedVariants,
+	coolantPerSecond,
+	coolingTowerCost,
 	createHeadStartProducers,
 	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
@@ -125,6 +128,18 @@ export const agentGameCommandSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("prestige"), ...agentOperationId }).strict(),
 	z
 		.object({
+			action: z.literal("buy_cooling_tower"),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("vent_wall"),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
 			action: z.literal("reset"),
 			confirm: z.literal("RESET"),
 			...agentOperationId,
@@ -158,6 +173,8 @@ export const createDefaultGameState = (
 		ascensionSparks: 0,
 		bestRunCans: 0,
 		cans: 0,
+		coolant: 0,
+		coolantTowers: 0,
 		frenzyStacks: 0,
 		goldenCans: 0,
 		lifetimeCans: 0,
@@ -179,6 +196,7 @@ export const createDefaultGameState = (
 		shadowBanned: false,
 		unlockedAchievements: [],
 		updatedAt: now,
+		ventedWalls: [],
 	};
 };
 
@@ -300,8 +318,12 @@ const accrueStateWithResult = (
 		goldenRushReadyAt = new Date(nowMs + rollGoldenRushDelayMs(secureRandom()));
 	}
 
+	const coolantGain =
+		coolantPerSecond(state) * (elapsedMs / 1000) * offlineMultiplier;
+
 	nextState = {
 		...nextState,
+		coolant: clampGameValue(state.coolant + coolantGain),
 		frenzyEndsAt,
 		frenzyStacks,
 		goldenRushBuffEndsAt,
@@ -331,6 +353,8 @@ const toSnapshot = (
 	bestRunCans: state.bestRunCans,
 	cans: state.cans,
 	collection: state.collection,
+	coolant: state.coolant,
+	coolantTowers: state.coolantTowers,
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
 	frenzyStacks: state.frenzyStacks,
 	goldenCans: state.goldenCans,
@@ -353,6 +377,7 @@ const toSnapshot = (
 	totalAscensionSparks: state.totalAscensionSparks,
 	totalGoldenCans: state.totalGoldenCans,
 	unlockedAchievements: state.unlockedAchievements,
+	ventedWalls: state.ventedWalls,
 });
 
 interface GameMutationResult {
@@ -527,6 +552,33 @@ export const buyProducer = (producerId: string, quantity = 1): GameMutation => {
 				[producerId]: state.producers[producerId] + quantity,
 			},
 		};
+	};
+};
+
+export const buyCoolingTower: GameMutation = (state) => {
+	const cost = coolingTowerCost(state.coolantTowers);
+	if (state.cans < cost) {
+		throw insufficientFunds();
+	}
+	return {
+		...state,
+		cans: state.cans - cost,
+		coolantTowers: clampGameCounter(state.coolantTowers + 1),
+	};
+};
+
+export const ventWall: GameMutation = (state) => {
+	const wall = activeWall(state);
+	if (!wall) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "No wall to vent" });
+	}
+	if (state.coolant < wall.ventCost) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "Not enough coolant" });
+	}
+	return {
+		...state,
+		coolant: state.coolant - wall.ventCost,
+		ventedWalls: [...state.ventedWalls, wall.id],
 	};
 };
 
@@ -773,6 +825,7 @@ export const prestige: GameMutation = (state) => {
 		ascensionSparks: clampGameCounter(state.ascensionSparks + sparkGain),
 		bestRunCans: Math.max(state.bestRunCans, state.runCans),
 		cans: 0,
+		coolantTowers: 0,
 		frenzyEndsAt: null,
 		frenzyStacks: 0,
 		goldenCans: clampGameCounter(state.goldenCans + reward),
@@ -782,6 +835,7 @@ export const prestige: GameMutation = (state) => {
 		totalAscensionSparks: clampGameCounter(
 			state.totalAscensionSparks + sparkGain
 		),
+		ventedWalls: [],
 	};
 	if (state.ascensionNodes["second-wind"] > 0) {
 		nextState = addCans(
@@ -815,6 +869,16 @@ export const gameRouter = router({
 				sessionIsAnonymous(ctx.session),
 				input,
 				buyAscensionNode(input.nodeId)
+			)
+		),
+	buyCoolingTower: protectedProcedure
+		.input(mutationInput)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				buyCoolingTower
 			)
 		),
 	buyProducer: protectedProcedure
@@ -917,6 +981,16 @@ export const gameRouter = router({
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
 				input
+			)
+		),
+	ventWall: protectedProcedure
+		.input(mutationInput)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				ventWall
 			)
 		),
 });
@@ -1084,6 +1158,8 @@ export const createAgentGameObservation = (
 			unlocked,
 		};
 	});
+	const wall = activeWall(state);
+	const towerCost = coolingTowerCost(state.coolantTowers);
 	const legalActions: AgentGameCommand[] = [{ action: "observe" }];
 	if (manualClicksAvailable > 0) {
 		legalActions.push({
@@ -1114,6 +1190,18 @@ export const createAgentGameObservation = (
 				upgradeId: upgrade.id,
 			});
 		}
+	}
+	if (state.cans >= towerCost) {
+		legalActions.push({
+			action: "buy_cooling_tower",
+			operationId: crypto.randomUUID(),
+		});
+	}
+	if (wall && state.coolant >= wall.ventCost) {
+		legalActions.push({
+			action: "vent_wall",
+			operationId: crypto.randomUUID(),
+		});
 	}
 	for (const node of ascensionNodes) {
 		if (node.affordable) {
@@ -1149,6 +1237,21 @@ export const createAgentGameObservation = (
 			},
 			baseClickValue: clickValue,
 			cansPerSecond: calculateCps(state),
+			coolant: {
+				amount: state.coolant,
+				coolantPerSecond: coolantPerSecond(state),
+				towerCost,
+				towers: state.coolantTowers,
+				wall: wall
+					? {
+							description: wall.description,
+							id: wall.id,
+							name: wall.name,
+							ventable: state.coolant >= wall.ventCost,
+							ventCost: wall.ventCost,
+						}
+					: null,
+			},
 			effectiveClickValue:
 				clickValue *
 				(frenzyActive ? activeFrenzyMultiplier(state, state.frenzyStacks) : 1),
@@ -1179,6 +1282,12 @@ const mutationForAgentCommand = (command: AgentGameCommand): GameMutation => {
 	}
 	if (command.action === "buy_upgrade") {
 		return buyUpgrade(command.upgradeId);
+	}
+	if (command.action === "buy_cooling_tower") {
+		return buyCoolingTower;
+	}
+	if (command.action === "vent_wall") {
+		return ventWall;
 	}
 	if (command.action === "buy_ascension_node") {
 		return buyAscensionNode(command.nodeId);
