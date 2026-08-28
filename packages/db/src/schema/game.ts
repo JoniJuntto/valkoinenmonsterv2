@@ -43,6 +43,10 @@ export const gameState = pgTable("game_state", {
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
 	totalGoldenCans: doublePrecision("total_golden_cans").default(0).notNull(),
+	unlockedAchievements: jsonb("unlocked_achievements")
+		.$type<string[]>()
+		.default([])
+		.notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true })
 		.defaultNow()
 		.$onUpdate(() => new Date())

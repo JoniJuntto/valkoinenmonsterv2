@@ -2,10 +2,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
+	bestStockerPurchase,
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
-	cheapestAffordableProducer,
 	clampGameValue,
 	clickBuffMultiplier,
 	countUnlockedAchievements,
@@ -20,6 +20,8 @@ import {
 	isGoldenUpgradeId,
 	nextGoldenCanRequirement,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
+	PRODUCER_SYNERGY_SOURCES,
 	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	type ProducerId,
@@ -28,6 +30,7 @@ import {
 	RUN_UPGRADES,
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
+	SYNERGY_BONUS_PER_OWNED,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -84,6 +87,20 @@ const CAN_IMAGES = {
 		regular: "/valkoinenmonster.webp",
 	},
 } as const;
+
+// ponytail: classic Konami code, swipe gestures if anyone actually asks
+const KONAMI_SEQUENCE = [
+	"ArrowUp",
+	"ArrowUp",
+	"ArrowDown",
+	"ArrowDown",
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowLeft",
+	"ArrowRight",
+	"b",
+	"a",
+] as const;
 
 const formatElapsedTime = (elapsedMs: number): string => {
 	const totalSeconds = Math.floor(elapsedMs / 1000);
@@ -216,6 +233,11 @@ const runUpgradesByCost = [...RUN_UPGRADES].sort(
 	(left, right) => left.cost - right.cost
 );
 
+const PRODUCER_NAME_BY_ID = new Map(
+	PRODUCERS.map(({ id, name }) => [id, name])
+);
+const SYNERGY_PERCENT = SYNERGY_BONUS_PER_OWNED * 100;
+
 const selectVisibleProducers = (game: GameSnapshot) => {
 	let highestOwnedIndex = -1;
 	for (const [index, producer] of PRODUCERS.entries()) {
@@ -257,6 +279,19 @@ const selectVisibleRunUpgrades = (
 		visible.push(upgrade);
 	}
 	return visible;
+};
+
+const selectCanImage = (
+	isEsMode: boolean,
+	isMegisActive: boolean,
+	isFrenzyActive: boolean
+): string => {
+	if (isMegisActive) {
+		return "/valkoinenmegis.webp";
+	}
+	return CAN_IMAGES[isEsMode ? "es" : "monster"][
+		isFrenzyActive ? "frenzy" : "regular"
+	];
 };
 
 const GameLoading = () => (
@@ -391,6 +426,7 @@ interface CanCardProps {
 	clickLabels: ClickLabel[];
 	game: GameSnapshot;
 	isEsMode: boolean;
+	isMegisActive: boolean;
 	isMuted: boolean;
 	onClick: () => void;
 	onToggleEsMode: () => void;
@@ -400,6 +436,7 @@ interface CanCardProps {
 const CanCard = ({
 	game,
 	isEsMode,
+	isMegisActive,
 	isMuted,
 	onClick,
 	onToggleEsMode,
@@ -408,10 +445,7 @@ const CanCard = ({
 }: CanCardProps) => {
 	const now = game.serverNow;
 	const isFrenzyActive = (game.frenzyEndsAt ?? 0) > now;
-	const canImage =
-		CAN_IMAGES[isEsMode ? "es" : "monster"][
-			isFrenzyActive ? "frenzy" : "regular"
-		];
+	const canImage = selectCanImage(isEsMode, isMegisActive, isFrenzyActive);
 	const frenzySeconds = isFrenzyActive
 		? Math.max(0, ((game.frenzyEndsAt ?? now) - now) / 1000)
 		: 0;
@@ -598,6 +632,12 @@ const ShopCard = ({
 						{selectVisibleProducers(game).map((producer) => {
 							const owned = game.producers[producer.id];
 							const cost = producerBulkCost(producer.id, owned, buyQuantity);
+							const boostsName = PRODUCER_NAME_BY_ID.get(
+								PRODUCER_SYNERGIES[producer.id]
+							);
+							const boostedByName = PRODUCER_NAME_BY_ID.get(
+								PRODUCER_SYNERGY_SOURCES[producer.id]
+							);
 							return (
 								<li
 									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
@@ -608,6 +648,9 @@ const ShopCard = ({
 										<p className="text-muted-foreground">
 											{owned} owned · {formatGameNumber(producer.baseCps)} base
 											CPS
+										</p>
+										<p className="text-muted-foreground text-xs">
+											{`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
 										</p>
 									</div>
 									<Button
@@ -928,6 +971,8 @@ export const MonsterGame = () => {
 	const clickLabelIdRef = useRef(0);
 	const clickLabelTimeoutsRef = useRef(new Set<number>());
 	const [isEsMode, setIsEsMode] = useState(false);
+	const [isMegisActive, setIsMegisActive] = useState(false);
+	const konamiIndexRef = useRef(0);
 	const [isMuted, setIsMuted] = useState(() =>
 		typeof window === "undefined"
 			? false
@@ -1101,6 +1146,28 @@ export const MonsterGame = () => {
 	useEffect(() => {
 		window.localStorage.setItem("monster-muted", String(isMuted));
 	}, [isMuted]);
+
+	useEffect(() => {
+		const handleKeyDown = (event: KeyboardEvent) => {
+			const expected = KONAMI_SEQUENCE[konamiIndexRef.current];
+			const pressed =
+				event.key.length === 1 ? event.key.toLowerCase() : event.key;
+			if (pressed === expected) {
+				konamiIndexRef.current += 1;
+				if (konamiIndexRef.current === KONAMI_SEQUENCE.length) {
+					konamiIndexRef.current = 0;
+					setIsMegisActive((active) => {
+						toast(active ? "Monster is back" : "MEGIS MODE");
+						return !active;
+					});
+				}
+				return;
+			}
+			konamiIndexRef.current = pressed === KONAMI_SEQUENCE[0] ? 1 : 0;
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, []);
 
 	useEffect(() => {
 		window.localStorage.setItem(
@@ -1345,7 +1412,7 @@ export const MonsterGame = () => {
 				isSmartStockerEnabled &&
 				current.goldenUpgrades["smart-stocker"] > 0
 			) {
-				const producerId = cheapestAffordableProducer(current, current.cans);
+				const producerId = bestStockerPurchase(current, current.cans);
 				if (producerId) {
 					buyProducerNow(producerId, "smart_stocker").catch(() => undefined);
 					return;
@@ -1521,6 +1588,7 @@ export const MonsterGame = () => {
 				clickLabels={clickLabels}
 				game={game}
 				isEsMode={isEsMode}
+				isMegisActive={isMegisActive}
 				isMuted={isMuted}
 				onClick={clickCan}
 				onToggleEsMode={toggleEsMode}

@@ -13,6 +13,7 @@ import {
 	GOLDEN_UPGRADES,
 	type GoldenRushBuffKind,
 	type GoldenUpgradeRanks,
+	isAchievementId,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
 	MAX_GAME_VALUE,
@@ -156,6 +157,9 @@ export const normalizePersistedGameState = (
 			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
 			: [],
 		totalGoldenCans,
+		unlockedAchievements: Array.isArray(state.unlockedAchievements)
+			? [...new Set(state.unlockedAchievements.filter(isAchievementId))]
+			: [],
 	};
 };
 
@@ -212,6 +216,12 @@ export const assertProgressionInvariants = (
 		state.runUpgrades.length === new Set(state.runUpgrades).size &&
 			state.runUpgrades.every(isRunUpgradeId),
 		"run upgrades must be known and unique"
+	);
+	invariant(
+		state.unlockedAchievements.length ===
+			new Set(state.unlockedAchievements).size &&
+			state.unlockedAchievements.every(isAchievementId),
+		"unlocked achievements must be known and unique"
 	);
 	invariant(
 		Object.keys(state.goldenUpgrades).length === GOLDEN_UPGRADES.length &&

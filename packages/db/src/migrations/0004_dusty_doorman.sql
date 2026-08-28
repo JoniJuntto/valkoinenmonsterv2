@@ -6,10 +6,10 @@ CREATE TABLE "season_state" (
 	"manual_click_budget" double precision DEFAULT 20 NOT NULL,
 	"producers" jsonb NOT NULL,
 	"revision" integer DEFAULT 0 NOT NULL,
-	"season_id" text NOT NULL,
 	"score" double precision DEFAULT 0 NOT NULL,
-	"upgrades" jsonb NOT NULL,
+	"season_id" text NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"upgrades" jsonb NOT NULL,
 	"user_id" text NOT NULL,
 	CONSTRAINT "season_state_user_id_season_id_pk" PRIMARY KEY("user_id","season_id")
 );
