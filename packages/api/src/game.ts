@@ -15,6 +15,10 @@ export const ACHIEVEMENT_PRODUCTION_BONUS = 0.01;
 export const FRENZY_CORE_BONUS = 5;
 export const FRENZY_CHRONOMETER_BONUS_MS = 2000;
 export const OVERCHARGE_MULTIPLIER = 2;
+export const ASCENSION_SPARK_DIVISOR = 5;
+export const ASCENSION_WIND_SECONDS = 300;
+export const FRENZY_STACK_BONUS = 2;
+export const MAX_FRENZY_STACKS = 2;
 export const GOLDEN_RUSH_DROP_CHANCE = 0.25;
 
 export const COOLING_TOWER_BASE_COST = 200_000_000_000;
@@ -440,6 +444,68 @@ export const GOLDEN_UPGRADES = [
 export type GoldenUpgradeId = (typeof GOLDEN_UPGRADES)[number]["id"];
 export type GoldenUpgradeRanks = Record<GoldenUpgradeId, number>;
 
+export interface AscensionNodeDefinition {
+	baseCost: number;
+	costGrowth?: number;
+	description: string;
+	id: string;
+	maxRank: number;
+	name: string;
+	requiredNode?: string;
+	requiredRank?: number;
+}
+
+export const ASCENSION_NODES = [
+	{
+		baseCost: 1,
+		costGrowth: 2,
+		description: "Start each run with the first 1/2/3 cheap run upgrades owned",
+		id: "second-nature",
+		maxRank: 3,
+		name: "Second Nature",
+	},
+	{
+		baseCost: 2,
+		costGrowth: 2,
+		description: "Golden upgrades unlock 1 prestige level earlier per rank",
+		id: "master-key",
+		maxRank: 2,
+		name: "Master Key",
+	},
+	{
+		baseCost: 5,
+		description: "Start each run with 5 minutes of production banked",
+		id: "second-wind",
+		maxRank: 1,
+		name: "Second Wind",
+		requiredNode: "second-nature",
+		requiredRank: 1,
+	},
+	{
+		baseCost: 3,
+		description:
+			"Frenzies stack: trigger one during a frenzy to double its multiplier and extend it",
+		id: "frenzy-stacking",
+		maxRank: 1,
+		name: "Twin Fizz",
+		requiredNode: "master-key",
+		requiredRank: 1,
+	},
+	{
+		baseCost: 6,
+		description: "Golden rush buffs last twice as long",
+		id: "golden-echo",
+		maxRank: 1,
+		name: "Golden Echo",
+		requiredNode: "frenzy-stacking",
+		requiredRank: 1,
+	},
+] as const satisfies readonly AscensionNodeDefinition[];
+
+export type AscensionNodeId = (typeof ASCENSION_NODES)[number]["id"];
+export type AscensionNode = (typeof ASCENSION_NODES)[number];
+export type AscensionNodeRanks = Record<AscensionNodeId, number>;
+
 export type GoldenRushBuffKind = "click_rush" | "production_frenzy";
 
 export type GoldenRushReward =
@@ -666,11 +732,14 @@ export const rollGoldenRushDrop = (
 };
 
 export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
+	ascensionNodes: AscensionNodeRanks;
+	ascensionSparks: number;
 	bestRunCans: number;
 	cans: number;
 	coolant: number;
 	coolantTowers: number;
 	frenzyEndsAt: number | null;
+	frenzyStacks: number;
 	goldenCans: number;
 	goldenRushReadyAt: number | null;
 	idleReport: {
@@ -687,6 +756,7 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	revision: number;
 	runCans: number;
 	serverNow: number;
+	totalAscensionSparks: number;
 	unlockedAchievements: string[];
 	ventedWalls: string[];
 }
@@ -699,6 +769,14 @@ const goldenUpgradeById = new Map(
 	GOLDEN_UPGRADES.map((upgrade) => [upgrade.id, upgrade])
 );
 const goldenUpgradeIds = new Set<string>(GOLDEN_UPGRADES.map(({ id }) => id));
+const ascensionNodeById = new Map(
+	ASCENSION_NODES.map((node) => [node.id, node])
+);
+const ascensionNodeIds = new Set<string>(ASCENSION_NODES.map(({ id }) => id));
+const startingRunUpgradeIds = [...RUN_UPGRADES]
+	.filter(({ kind }) => kind !== "milestone")
+	.sort((left, right) => left.cost - right.cost)
+	.map(({ id }) => id);
 const compactNumberFormatter = new Intl.NumberFormat("en", {
 	maximumFractionDigits: 2,
 	notation: "compact",
@@ -720,6 +798,14 @@ export const createInitialGoldenUpgrades = (): GoldenUpgradeRanks => {
 	const ranks = {} as GoldenUpgradeRanks;
 	for (const upgrade of GOLDEN_UPGRADES) {
 		ranks[upgrade.id] = 0;
+	}
+	return ranks;
+};
+
+export const createInitialAscensionNodes = (): AscensionNodeRanks => {
+	const ranks = {} as AscensionNodeRanks;
+	for (const node of ASCENSION_NODES) {
+		ranks[node.id as AscensionNodeId] = 0;
 	}
 	return ranks;
 };
@@ -852,6 +938,68 @@ export const goldenUpgradeCost = (
 	}
 	return upgrade.baseCost * (rank + 1);
 };
+
+export const isAscensionNodeId = (value: string): value is AscensionNodeId =>
+	ascensionNodeIds.has(value);
+
+export const getAscensionNode = (id: AscensionNodeId) =>
+	ascensionNodeById.get(id);
+
+export const ascensionNodeCost = (
+	nodeId: AscensionNodeId,
+	rank: number
+): number => {
+	const node = getAscensionNode(nodeId);
+	if (!node) {
+		return MAX_GAME_VALUE;
+	}
+	if ("costGrowth" in node) {
+		return Math.round(node.baseCost * node.costGrowth ** Math.max(0, rank));
+	}
+	return node.baseCost * (Math.max(0, rank) + 1);
+};
+
+export const ascensionNodeUnlocked = (
+	nodes: AscensionNodeRanks,
+	node: AscensionNode
+): boolean => {
+	if (!("requiredNode" in node && isAscensionNodeId(node.requiredNode))) {
+		return true;
+	}
+	const requiredRank = "requiredRank" in node ? (node.requiredRank ?? 1) : 1;
+	return (nodes[node.requiredNode] ?? 0) >= requiredRank;
+};
+
+export const ascensionPotential = (totalGoldenCans: number): number =>
+	clampGameCounter(
+		Math.sqrt(clampGameValue(totalGoldenCans)) / ASCENSION_SPARK_DIVISOR
+	);
+
+export const ascensionReward = (
+	totalGoldenCans: number,
+	totalAscensionSparks: number
+): number =>
+	clampGameCounter(
+		ascensionPotential(totalGoldenCans) -
+			Math.max(0, Math.floor(totalAscensionSparks))
+	);
+
+export const createStartingRunUpgrades = (
+	nodes: AscensionNodeRanks
+): string[] =>
+	startingRunUpgradeIds.slice(0, Math.max(0, nodes["second-nature"] ?? 0));
+
+export const goldenUpgradeUnlockLevel = (
+	upgrade: { unlockLevel: number },
+	nodes: AscensionNodeRanks
+): number =>
+	Math.max(1, upgrade.unlockLevel - Math.max(0, nodes["master-key"] ?? 0));
+
+export const activeFrenzyMultiplier = (
+	progress: GameProgress,
+	frenzyStacks: number
+): number =>
+	frenzyMultiplier(progress) * (frenzyStacks > 1 ? FRENZY_STACK_BONUS : 1);
 
 const hasRunUpgrade = (progress: GameProgress, id: string): boolean =>
 	progress.runUpgrades.includes(id);
@@ -1267,13 +1415,14 @@ export const productionTimeMs = (
 	elapsedMs: number,
 	frenzyMs: number,
 	buffMs = 0,
-	buffMultiplier = 1
+	buffMultiplier = 1,
+	frenzyBoost = 1
 ): number => {
 	const safeElapsedMs = Math.max(0, elapsedMs);
 	const safeFrenzyMs = Math.min(safeElapsedMs, Math.max(0, frenzyMs));
 	const safeBuffMs = Math.min(safeElapsedMs, Math.max(0, buffMs));
 	const overlapMs = Math.min(safeFrenzyMs, safeBuffMs);
-	const frenzyBonus = frenzyMultiplier(progress) - 1;
+	const frenzyBonus = frenzyMultiplier(progress) * frenzyBoost - 1;
 	const buffBonus = Math.max(0, buffMultiplier - 1);
 	return (
 		safeElapsedMs +
@@ -1289,11 +1438,19 @@ export const calculateIdleGain = (
 	frenzyMs: number,
 	productionMultiplier: number,
 	buffMs = 0,
-	buffMultiplier = 1
+	buffMultiplier = 1,
+	frenzyBoost = 1
 ): number =>
 	clampGameValue(
 		calculateCps(progress) *
-			(productionTimeMs(progress, elapsedMs, frenzyMs, buffMs, buffMultiplier) /
+			(productionTimeMs(
+				progress,
+				elapsedMs,
+				frenzyMs,
+				buffMs,
+				buffMultiplier,
+				frenzyBoost
+			) /
 				1000) *
 			Math.max(0, productionMultiplier)
 	);

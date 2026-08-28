@@ -12,6 +12,11 @@ import {
 import { user } from "./auth";
 
 export const gameState = pgTable("game_state", {
+	ascensionNodes: jsonb("ascension_nodes")
+		.$type<Record<string, number>>()
+		.notNull()
+		.default({}),
+	ascensionSparks: doublePrecision("ascension_sparks").default(0).notNull(),
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
 	collection: jsonb("collection").$type<string[]>().notNull().default([]),
@@ -21,6 +26,7 @@ export const gameState = pgTable("game_state", {
 		.defaultNow()
 		.notNull(),
 	frenzyEndsAt: timestamp("frenzy_ends_at", { withTimezone: true }),
+	frenzyStacks: integer("frenzy_stacks").default(0).notNull(),
 	goldenCans: doublePrecision("golden_cans").default(0).notNull(),
 	goldenRushBuffEndsAt: timestamp("golden_rush_buff_ends_at", {
 		withTimezone: true,
@@ -45,6 +51,9 @@ export const gameState = pgTable("game_state", {
 	runCans: doublePrecision("run_cans").default(0).notNull(),
 	runUpgrades: jsonb("run_upgrades").$type<string[]>().notNull(),
 	shadowBanned: boolean("shadow_banned").default(false).notNull(),
+	totalAscensionSparks: doublePrecision("total_ascension_sparks")
+		.default(0)
+		.notNull(),
 	totalGoldenCans: doublePrecision("total_golden_cans").default(0).notNull(),
 	unlockedAchievements: jsonb("unlocked_achievements")
 		.$type<string[]>()

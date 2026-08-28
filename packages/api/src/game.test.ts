@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	ASCENSION_NODES,
 	acceptManualClicks,
+	activeFrenzyMultiplier,
 	activeWall,
+	ascensionNodeCost,
+	ascensionNodeUnlocked,
+	ascensionPotential,
+	ascensionReward,
 	bestStockerPurchase,
 	CAN_VARIANTS,
 	COLLECTION_SETS,
@@ -18,8 +24,10 @@ import {
 	coolingTowerCost,
 	countUnlockedAchievements,
 	createHeadStartProducers,
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
+	createStartingRunUpgrades,
 	derivedCanVariantIds,
 	FLAVOR_UPGRADES,
 	FRENZY_DURATION_MS,
@@ -33,6 +41,7 @@ import {
 	GOLDEN_UPGRADES,
 	goldenCanPotential,
 	goldenUpgradeCost,
+	goldenUpgradeUnlockLevel,
 	isProducerId,
 	luckyCanGain,
 	MAX_GAME_VALUE,
@@ -60,6 +69,78 @@ const createProgress = (): GameProgress => ({
 	producers: createInitialProducers(),
 	runUpgrades: [],
 	totalGoldenCans: 0,
+});
+
+describe("ascension layer", () => {
+	test("derives sparks from total golden cans without re-farming", () => {
+		expect(ascensionPotential(0)).toBe(0);
+		expect(ascensionPotential(24)).toBe(0);
+		expect(ascensionPotential(25)).toBe(1);
+		expect(ascensionPotential(100)).toBe(2);
+		expect(ascensionPotential(2500)).toBe(10);
+		expect(ascensionReward(24, 0)).toBe(0);
+		expect(ascensionReward(100, 0)).toBe(2);
+		expect(ascensionReward(100, 2)).toBe(0);
+		expect(ascensionReward(2500, 2)).toBe(8);
+	});
+
+	test("prices and gates ascension nodes", () => {
+		const findNode = (id: string) => {
+			const node = ASCENSION_NODES.find((entry) => entry.id === id);
+			if (!node) {
+				throw new Error(`Missing node: ${id}`);
+			}
+			return node;
+		};
+		const nodes = createInitialAscensionNodes();
+		expect(ascensionNodeCost("second-nature", 0)).toBe(1);
+		expect(ascensionNodeCost("second-nature", 2)).toBe(4);
+		expect(ascensionNodeCost("master-key", 1)).toBe(4);
+		expect(ascensionNodeCost("second-wind", 0)).toBe(5);
+		expect(ascensionNodeUnlocked(nodes, findNode("second-nature"))).toBe(true);
+		expect(ascensionNodeUnlocked(nodes, findNode("second-wind"))).toBe(false);
+		nodes["second-nature"] = 1;
+		expect(ascensionNodeUnlocked(nodes, findNode("second-wind"))).toBe(true);
+		expect(ascensionNodeUnlocked(nodes, findNode("frenzy-stacking"))).toBe(
+			false
+		);
+		nodes["master-key"] = 1;
+		expect(ascensionNodeUnlocked(nodes, findNode("frenzy-stacking"))).toBe(
+			true
+		);
+	});
+
+	test("second nature starts runs with cheap non-milestone upgrades", () => {
+		const nodes = createInitialAscensionNodes();
+		expect(createStartingRunUpgrades(nodes)).toEqual([]);
+		nodes["second-nature"] = 2;
+		expect(createStartingRunUpgrades(nodes)).toEqual(["cold-can", "firm-grip"]);
+	});
+
+	test("master key lowers golden upgrade prestige gates", () => {
+		const nodes = createInitialAscensionNodes();
+		expect(goldenUpgradeUnlockLevel({ unlockLevel: 2 }, nodes)).toBe(2);
+		nodes["master-key"] = 1;
+		expect(goldenUpgradeUnlockLevel({ unlockLevel: 2 }, nodes)).toBe(1);
+		nodes["master-key"] = 5;
+		expect(goldenUpgradeUnlockLevel({ unlockLevel: 2 }, nodes)).toBe(1);
+	});
+
+	test("stacked frenzies double the frenzy multiplier", () => {
+		const progress = createProgress();
+		expect(activeFrenzyMultiplier(progress, 1)).toBe(10);
+		expect(activeFrenzyMultiplier(progress, 2)).toBe(20);
+		progress.goldenUpgrades["frenzy-core"] = 2;
+		expect(activeFrenzyMultiplier(progress, 2)).toBe(40);
+	});
+
+	test("extends production time by the stacked frenzy boost", () => {
+		const progress = createProgress();
+		expect(productionTimeMs(progress, 10_000, 4000, 0, 1, 1)).toBe(46_000);
+		expect(productionTimeMs(progress, 10_000, 4000, 0, 1, 2)).toBe(86_000);
+		progress.producers["mini-fridge"] = 1;
+		expect(calculateIdleGain(progress, 10_000, 4000, 1, 0, 1, 2)).toBe(86);
+	});
 });
 
 describe("Monster game economy", () => {

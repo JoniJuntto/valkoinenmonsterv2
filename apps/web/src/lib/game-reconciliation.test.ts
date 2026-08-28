@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	type GameSnapshot,
@@ -17,11 +18,14 @@ import {
 const createSnapshot = (
 	overrides: Partial<GameSnapshot> = {}
 ): GameSnapshot => ({
+	ascensionNodes: createInitialAscensionNodes(),
+	ascensionSparks: 0,
 	bestRunCans: 0,
 	cans: 0,
 	coolant: 0,
 	coolantTowers: 0,
 	frenzyEndsAt: null,
+	frenzyStacks: 0,
 	goldenCans: 0,
 	goldenRushBuffEndsAt: null,
 	goldenRushBuffKind: null,
@@ -39,6 +43,7 @@ const createSnapshot = (
 	runCans: 0,
 	runUpgrades: [],
 	serverNow: 1000,
+	totalAscensionSparks: 0,
 	totalGoldenCans: 0,
 	unlockedAchievements: [],
 	ventedWalls: [],
