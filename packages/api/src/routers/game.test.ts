@@ -16,6 +16,7 @@ const {
 	accrueState,
 	advanceOpenState,
 	agentGameCommandSchema,
+	buyCoolingTower,
 	buyProducer,
 	buyUpgrade,
 	claimGoldenRush,
@@ -26,6 +27,7 @@ const {
 	prestige,
 	rankLeaderboard,
 	resetGameState,
+	ventWall,
 } = await import("./game");
 
 const operationId = "00000000-0000-4000-8000-000000000001";
@@ -123,6 +125,54 @@ describe("server-authoritative mutations", () => {
 		expect(reset.producers["taurine-comet"]).toBe(0);
 	});
 
+	test("vents walls in order with coolant", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.runCans = 1e12;
+		expect(() => ventWall(state, new Date(0))).toThrow("Not enough coolant");
+		state.coolant = 99;
+		expect(() => ventWall(state, new Date(0))).toThrow("Not enough coolant");
+		state.coolant = 100;
+		const vented = ventWall(state, new Date(0));
+		expect(vented.coolant).toBe(0);
+		expect(vented.ventedWalls).toEqual(["overheat"]);
+		expect(() => ventWall(vented, new Date(0))).toThrow("No wall to vent");
+	});
+
+	test("buys cooling towers with cans", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		expect(() => buyCoolingTower(state, new Date(0))).toThrow(
+			"Not enough cans"
+		);
+		state.cans = 199_999_999_999;
+		expect(() => buyCoolingTower(state, new Date(0))).toThrow(
+			"Not enough cans"
+		);
+		state.cans = 200_000_000_000;
+		const purchased = buyCoolingTower(state, new Date(0));
+		expect(purchased.coolantTowers).toBe(1);
+		expect(purchased.cans).toBe(0);
+	});
+
+	test("accrues coolant from towers with the offline penalty", () => {
+		const online = createDefaultGameState("online", new Date(0));
+		online.coolantTowers = 2;
+		expect(accrueState(online, 0, new Date(10_000)).coolant).toBeCloseTo(10);
+
+		const offline = createDefaultGameState("offline", new Date(0));
+		offline.coolantTowers = 2;
+		expect(accrueState(offline, 0, new Date(15_000)).coolant).toBeCloseTo(1.5);
+	});
+
+	test("halves accrual while overheated until the wall is vented", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.producers["mini-fridge"] = 1;
+		state.runCans = 1e12;
+		expect(accrueState(state, 0, new Date(10_000)).cans).toBeCloseTo(5);
+		state.coolant = 100;
+		const vented = ventWall(state, new Date(0));
+		expect(accrueState(vented, 0, new Date(10_000)).cans).toBeCloseTo(10);
+	});
+
 	test("resets and preserves every prestige field by contract", () => {
 		const state = createDefaultGameState("user", new Date(0));
 		state.cans = 120_000;
@@ -143,6 +193,9 @@ describe("server-authoritative mutations", () => {
 		state.goldenRushBuffKind = "production_frenzy";
 		state.goldenRushBuffEndsAt = new Date(4000);
 		state.shadowBanned = true;
+		state.coolant = 55;
+		state.coolantTowers = 2;
+		state.ventedWalls = ["overheat"];
 		const reset = prestige(state, new Date(0));
 		expect(reset.cans).toBe(0);
 		expect(reset.runCans).toBe(0);
@@ -163,6 +216,9 @@ describe("server-authoritative mutations", () => {
 		expect(reset.goldenRushReadyAt).toEqual(new Date(3000));
 		expect(reset.goldenRushBuffKind).toBe("production_frenzy");
 		expect(reset.goldenRushBuffEndsAt).toEqual(new Date(4000));
+		expect(reset.coolant).toBe(55);
+		expect(reset.coolantTowers).toBe(0);
+		expect(reset.ventedWalls).toEqual([]);
 		expect(reset.userId).toBe("user");
 		expect(reset.createdAt).toEqual(new Date(0));
 		expect(reset.shadowBanned).toBe(true);
@@ -278,6 +334,8 @@ describe("JSON agent game mode", () => {
 			{ action: "click", count: 20, operationId },
 			{ action: "buy_producer", operationId, producerId: "pull-tab" },
 			{ action: "buy_upgrade", operationId, upgradeId: "cold-can" },
+			{ action: "buy_cooling_tower", operationId },
+			{ action: "vent_wall", operationId },
 			{ action: "wait", milliseconds: 5000, operationId },
 			{ action: "prestige", operationId },
 			{ action: "reset", confirm: "RESET", operationId },
@@ -355,6 +413,8 @@ describe("JSON agent game mode", () => {
 		const snapshot = {
 			bestRunCans: state.bestRunCans,
 			cans: state.cans,
+			coolant: state.coolant,
+			coolantTowers: state.coolantTowers,
 			frenzyEndsAt: null,
 			goldenCans: state.goldenCans,
 			goldenRushBuffEndsAt: null,
@@ -374,6 +434,7 @@ describe("JSON agent game mode", () => {
 			runUpgrades: state.runUpgrades,
 			serverNow: 0,
 			totalGoldenCans: state.totalGoldenCans,
+			ventedWalls: state.ventedWalls,
 		};
 		const observation = createAgentGameObservation(state, snapshot, [], {
 			action: "observe",

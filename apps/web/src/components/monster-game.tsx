@@ -2,12 +2,16 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
 	ACHIEVEMENTS,
+	activeWall,
 	CLICK_RUSH_MULTIPLIER,
+	COOLANT_PER_TOWER_PER_SEC,
 	calculateClickValue,
 	calculateCps,
 	cheapestAffordableProducer,
 	clampGameValue,
 	clickBuffMultiplier,
+	coolantPerSecond,
+	coolingTowerCost,
 	countUnlockedAchievements,
 	formatGameNumber,
 	frenzyDurationMs,
@@ -28,6 +32,7 @@ import {
 	RUN_UPGRADES,
 	type RunUpgradeDefinition,
 	type RunUpgradeKind,
+	WALLS,
 } from "@valkoinenmonsterv2/api/game";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
 import {
@@ -107,6 +112,8 @@ type MutationActionName =
 	| "sync"
 	| "buy_producer"
 	| "buy_upgrade"
+	| "buy_cooling_tower"
+	| "vent_wall"
 	| "claim_golden_rush"
 	| "trigger_frenzy"
 	| "prestige";
@@ -191,6 +198,30 @@ const trackMutationSuccess = (
 				run_cans_bucket: bucketCans(before.runCans),
 			});
 			setUserTraits({ prestige_level: projected.prestigeLevel });
+			break;
+		}
+		case "buy_cooling_tower": {
+			track(AnalyticsEvents.game.coolingTowerPurchased, {
+				cost: coolingTowerCost(Math.max(0, projected.coolantTowers - 1)),
+				owned_after: projected.coolantTowers,
+				run_cans_bucket: bucketCans(projected.runCans),
+			});
+			break;
+		}
+		case "vent_wall": {
+			const ventedWall = WALLS.find(
+				({ id }) =>
+					!before.ventedWalls.includes(id) && projected.ventedWalls.includes(id)
+			);
+			if (!ventedWall) {
+				break;
+			}
+			track(AnalyticsEvents.game.wallVented, {
+				prestige_level: projected.prestigeLevel,
+				run_cans_bucket: bucketCans(projected.runCans),
+				vent_cost: ventedWall.ventCost,
+				wall_id: ventedWall.id,
+			});
 			break;
 		}
 		case "trigger_frenzy": {
@@ -878,6 +909,89 @@ const AchievementsCard = ({ game }: AchievementsCardProps) => {
 	);
 };
 
+const COOLANT_TEASER_THRESHOLD = WALLS[0].threshold / 10;
+
+interface CoolantCardProps {
+	game: GameSnapshot;
+	isSaving: boolean;
+	onBuyCoolingTower: () => void;
+	onVentWall: () => void;
+}
+
+const CoolantCard = ({
+	game,
+	isSaving,
+	onBuyCoolingTower,
+	onVentWall,
+}: CoolantCardProps) => {
+	const wall = activeWall(game);
+	const towerCost = coolingTowerCost(game.coolantTowers);
+	const isVisible =
+		wall !== null ||
+		game.coolant > 0 ||
+		game.coolantTowers > 0 ||
+		game.runCans >= COOLANT_TEASER_THRESHOLD;
+	if (!isVisible) {
+		return null;
+	}
+	const coolantRate = coolantPerSecond(game);
+	return (
+		<Card className="order-6 self-start xl:col-start-1">
+			<CardHeader>
+				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
+					Coolant
+				</CardTitle>
+				<CardDescription>
+					{wall
+						? wall.description
+						: "Cooling towers produce coolant for the walls ahead."}
+				</CardDescription>
+			</CardHeader>
+			<CardContent className="flex flex-col gap-3">
+				{wall ? (
+					<div className="bg-destructive/10 p-3">
+						<h3 className="font-bold text-destructive">{wall.name} active</h3>
+						<Button
+							className="mt-2 w-full"
+							data-wall-id={wall.id}
+							disabled={isSaving || game.coolant < wall.ventCost}
+							onClick={onVentWall}
+							variant={game.coolant >= wall.ventCost ? "default" : "outline"}
+						>
+							Vent for {formatGameNumber(wall.ventCost)} coolant
+						</Button>
+					</div>
+				) : null}
+				<div className="flex items-baseline justify-between gap-2">
+					<span className="font-bold">Coolant</span>
+					<span className="tabular-nums">
+						{formatGameNumber(game.coolant)}
+						{coolantRate > 0 ? ` (+${formatGameNumber(coolantRate)}/s)` : ""}
+					</span>
+				</div>
+				<div className="flex items-center justify-between gap-3 bg-muted/30 p-3">
+					<div>
+						<h3 className="font-medium">Cooling Tower</h3>
+						<p className="text-muted-foreground">
+							{game.coolantTowers} owned ·{" "}
+							{formatGameNumber(COOLANT_PER_TOWER_PER_SEC)} coolant/s each
+						</p>
+					</div>
+					<Button
+						data-cooling-tower=""
+						disabled={isSaving || game.cans < towerCost}
+						onClick={onBuyCoolingTower}
+						size="sm"
+						variant={game.cans >= towerCost ? "default" : "outline"}
+					>
+						{formatGameNumber(towerCost)}
+					</Button>
+				</div>
+			</CardContent>
+		</Card>
+	);
+};
+
 interface GoldenRushCanProps {
 	game: GameSnapshot;
 	onClaim: () => void;
@@ -986,6 +1100,12 @@ export const MonsterGame = () => {
 	const { mutateAsync: claimGoldenRushMutation } = useMutation(
 		trpc.game.claimGoldenRush.mutationOptions()
 	);
+	const { mutateAsync: buyCoolingTowerMutation } = useMutation(
+		trpc.game.buyCoolingTower.mutationOptions()
+	);
+	const { mutateAsync: ventWallMutation } = useMutation(
+		trpc.game.ventWall.mutationOptions()
+	);
 
 	const updateGame = useCallback(
 		(updater: (current: GameSnapshot) => GameSnapshot) => {
@@ -1048,6 +1168,36 @@ export const MonsterGame = () => {
 			});
 		}
 	}, [game]);
+
+	const wall = game ? activeWall(game) : null;
+	const activeWallId = wall ? wall.id : null;
+	const lastActiveWallIdRef = useRef<string | null | undefined>(undefined);
+	useEffect(() => {
+		if (lastActiveWallIdRef.current === undefined) {
+			lastActiveWallIdRef.current = activeWallId;
+			return;
+		}
+		if (activeWallId === lastActiveWallIdRef.current) {
+			return;
+		}
+		lastActiveWallIdRef.current = activeWallId;
+		if (!(game && activeWallId)) {
+			return;
+		}
+		const triggeredWall = WALLS.find(({ id }) => id === activeWallId);
+		if (!triggeredWall) {
+			return;
+		}
+		toast.warning(`${triggeredWall.name}!`, {
+			description: triggeredWall.description,
+			duration: 12_000,
+		});
+		track(AnalyticsEvents.game.wallReached, {
+			prestige_level: game.prestigeLevel,
+			run_cans_bucket: bucketCans(game.runCans),
+			wall_id: triggeredWall.id,
+		});
+	}, [activeWallId, game]);
 
 	useEffect(() => {
 		if (isSessionPending || session || anonymousSignInStarted.current) {
@@ -1247,6 +1397,22 @@ export const MonsterGame = () => {
 			}
 		},
 		[refetchState]
+	);
+
+	const buyCoolingTowerNow = useCallback(
+		() =>
+			performMutation((input) => buyCoolingTowerMutation(input), {
+				action: "buy_cooling_tower",
+			}),
+		[buyCoolingTowerMutation, performMutation]
+	);
+
+	const ventWallNow = useCallback(
+		() =>
+			performMutation((input) => ventWallMutation(input), {
+				action: "vent_wall",
+			}),
+		[performMutation, ventWallMutation]
 	);
 
 	const syncNow = useCallback(
@@ -1496,6 +1662,12 @@ export const MonsterGame = () => {
 	const handleClaimGoldenRush = useCallback(() => {
 		claimGoldenRushNow().catch(() => undefined);
 	}, [claimGoldenRushNow]);
+	const handleBuyCoolingTower = useCallback(() => {
+		buyCoolingTowerNow().catch(() => undefined);
+	}, [buyCoolingTowerNow]);
+	const handleVentWall = useCallback(() => {
+		ventWallNow().catch(() => undefined);
+	}, [ventWallNow]);
 
 	if (isSessionPending || !session || isStateLoading || !game) {
 		return <GameLoading />;
@@ -1540,6 +1712,12 @@ export const MonsterGame = () => {
 				viewerId={session.user.id}
 			/>
 			<AchievementsCard game={game} />
+			<CoolantCard
+				game={game}
+				isSaving={isSaving}
+				onBuyCoolingTower={handleBuyCoolingTower}
+				onVentWall={handleVentWall}
+			/>
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>
 	);

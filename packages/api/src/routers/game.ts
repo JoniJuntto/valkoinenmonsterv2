@@ -13,6 +13,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
 	acceptManualClicks,
+	activeWall,
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
@@ -20,6 +21,8 @@ import {
 	cheapestAffordableProducer,
 	clampGameCounter,
 	clampGameValue,
+	coolantPerSecond,
+	coolingTowerCost,
 	createHeadStartProducers,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
@@ -99,6 +102,18 @@ export const agentGameCommandSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("prestige"), ...agentOperationId }).strict(),
 	z
 		.object({
+			action: z.literal("buy_cooling_tower"),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("vent_wall"),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
 			action: z.literal("reset"),
 			confirm: z.literal("RESET"),
 			...agentOperationId,
@@ -129,6 +144,8 @@ export const createDefaultGameState = (
 	return {
 		bestRunCans: 0,
 		cans: 0,
+		coolant: 0,
+		coolantTowers: 0,
 		goldenCans: 0,
 		lifetimeCans: 0,
 		prestigeLevel: 0,
@@ -147,6 +164,7 @@ export const createDefaultGameState = (
 		revision: 0,
 		shadowBanned: false,
 		updatedAt: now,
+		ventedWalls: [],
 	};
 };
 
@@ -252,8 +270,12 @@ const accrueStateWithResult = (
 		goldenRushReadyAt = new Date(nowMs + rollGoldenRushDelayMs(secureRandom()));
 	}
 
+	const coolantGain =
+		coolantPerSecond(state) * (elapsedMs / 1000) * offlineMultiplier;
+
 	nextState = {
 		...nextState,
+		coolant: clampGameValue(state.coolant + coolantGain),
 		frenzyEndsAt,
 		goldenRushBuffEndsAt,
 		goldenRushBuffKind,
@@ -279,6 +301,8 @@ const toSnapshot = (
 ): GameSnapshot => ({
 	bestRunCans: state.bestRunCans,
 	cans: state.cans,
+	coolant: state.coolant,
+	coolantTowers: state.coolantTowers,
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
 	goldenCans: state.goldenCans,
 	goldenRushBuffEndsAt: state.goldenRushBuffEndsAt?.getTime() ?? null,
@@ -298,6 +322,7 @@ const toSnapshot = (
 	runUpgrades: state.runUpgrades,
 	serverNow,
 	totalGoldenCans: state.totalGoldenCans,
+	ventedWalls: state.ventedWalls,
 });
 
 interface GameMutationResult {
@@ -464,6 +489,33 @@ export const buyProducer = (producerId: string, quantity = 1): GameMutation => {
 				[producerId]: state.producers[producerId] + quantity,
 			},
 		};
+	};
+};
+
+export const buyCoolingTower: GameMutation = (state) => {
+	const cost = coolingTowerCost(state.coolantTowers);
+	if (state.cans < cost) {
+		throw insufficientFunds();
+	}
+	return {
+		...state,
+		cans: state.cans - cost,
+		coolantTowers: clampGameCounter(state.coolantTowers + 1),
+	};
+};
+
+export const ventWall: GameMutation = (state) => {
+	const wall = activeWall(state);
+	if (!wall) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "No wall to vent" });
+	}
+	if (state.coolant < wall.ventCost) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "Not enough coolant" });
+	}
+	return {
+		...state,
+		coolant: state.coolant - wall.ventCost,
+		ventedWalls: [...state.ventedWalls, wall.id],
 	};
 };
 
@@ -641,11 +693,13 @@ export const prestige: GameMutation = (state) => {
 		...nextProgress,
 		bestRunCans: Math.max(state.bestRunCans, state.runCans),
 		cans: 0,
+		coolantTowers: 0,
 		frenzyEndsAt: null,
 		goldenCans: clampGameCounter(state.goldenCans + reward),
 		nextFrenzyClick: randomFrenzyThreshold(nextProgress, secureRandom()),
 		prestigeLevel: clampGameCounter(state.prestigeLevel + 1),
 		runCans: 0,
+		ventedWalls: [],
 	};
 };
 
@@ -664,6 +718,16 @@ const sessionIsAnonymous = (session: {
 }): boolean => Boolean(session.user.isAnonymous);
 
 export const gameRouter = router({
+	buyCoolingTower: protectedProcedure
+		.input(mutationInput)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				buyCoolingTower
+			)
+		),
 	buyProducer: protectedProcedure
 		.input(
 			mutationInput.extend({
@@ -752,6 +816,16 @@ export const gameRouter = router({
 				ctx.session.user.id,
 				sessionIsAnonymous(ctx.session),
 				input
+			)
+		),
+	ventWall: protectedProcedure
+		.input(mutationInput)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				ventWall
 			)
 		),
 });
@@ -899,6 +973,8 @@ export const createAgentGameObservation = (
 			unlockLevel: upgrade.unlockLevel,
 		};
 	});
+	const wall = activeWall(state);
+	const towerCost = coolingTowerCost(state.coolantTowers);
 	const legalActions: AgentGameCommand[] = [{ action: "observe" }];
 	if (manualClicksAvailable > 0) {
 		legalActions.push({
@@ -930,6 +1006,18 @@ export const createAgentGameObservation = (
 			});
 		}
 	}
+	if (state.cans >= towerCost) {
+		legalActions.push({
+			action: "buy_cooling_tower",
+			operationId: crypto.randomUUID(),
+		});
+	}
+	if (wall && state.coolant >= wall.ventCost) {
+		legalActions.push({
+			action: "vent_wall",
+			operationId: crypto.randomUUID(),
+		});
+	}
 	if (reward > 0) {
 		legalActions.push({
 			action: "prestige",
@@ -951,6 +1039,21 @@ export const createAgentGameObservation = (
 		stats: {
 			baseClickValue: clickValue,
 			cansPerSecond: calculateCps(state),
+			coolant: {
+				amount: state.coolant,
+				coolantPerSecond: coolantPerSecond(state),
+				towerCost,
+				towers: state.coolantTowers,
+				wall: wall
+					? {
+							description: wall.description,
+							id: wall.id,
+							name: wall.name,
+							ventable: state.coolant >= wall.ventCost,
+							ventCost: wall.ventCost,
+						}
+					: null,
+			},
 			effectiveClickValue:
 				clickValue * (frenzyActive ? frenzyMultiplier(state) : 1),
 			frenzy: {
@@ -977,6 +1080,12 @@ const mutationForAgentCommand = (command: AgentGameCommand): GameMutation => {
 	}
 	if (command.action === "buy_upgrade") {
 		return buyUpgrade(command.upgradeId);
+	}
+	if (command.action === "buy_cooling_tower") {
+		return buyCoolingTower;
+	}
+	if (command.action === "vent_wall") {
+		return ventWall;
 	}
 	if (command.action === "wait") {
 		return (state, now) => advanceOpenState(state, command.milliseconds, now);

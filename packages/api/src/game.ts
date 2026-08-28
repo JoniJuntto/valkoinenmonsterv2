@@ -16,6 +16,10 @@ export const FRENZY_CORE_BONUS = 5;
 export const FRENZY_CHRONOMETER_BONUS_MS = 2000;
 export const OVERCHARGE_MULTIPLIER = 2;
 
+export const COOLING_TOWER_BASE_COST = 200_000_000_000;
+export const COOLING_TOWER_COST_GROWTH = 1.15;
+export const COOLANT_PER_TOWER_PER_SEC = 0.5;
+
 export const GOLDEN_RUSH_MIN_DELAY_MS = 180_000;
 export const GOLDEN_RUSH_MAX_DELAY_MS = 420_000;
 export const GOLDEN_RUSH_VISIBLE_MS = 12_000;
@@ -126,6 +130,48 @@ export const PRODUCERS = [
 
 export type ProducerId = (typeof PRODUCERS)[number]["id"];
 export type ProducerCounts = Record<ProducerId, number>;
+
+export interface WallDefinition {
+	coolantMultiplier: number;
+	description: string;
+	id: string;
+	name: string;
+	productionMultiplier: number;
+	threshold: number;
+	ventCost: number;
+}
+
+export const WALLS = [
+	{
+		coolantMultiplier: 1,
+		description: "Production halved — vent the overheat with coolant",
+		id: "overheat",
+		name: "Overheat",
+		productionMultiplier: 0.5,
+		threshold: 1e12,
+		ventCost: 100,
+	},
+	{
+		coolantMultiplier: 0.25,
+		description: "Cooling towers at quarter output — vent the siphon",
+		id: "siphon",
+		name: "Coolant Siphon",
+		productionMultiplier: 1,
+		threshold: 1e15,
+		ventCost: 1000,
+	},
+	{
+		coolantMultiplier: 1,
+		description: "Production halved — vent the blackout",
+		id: "blackout",
+		name: "Blackout",
+		productionMultiplier: 0.5,
+		threshold: 1e18,
+		ventCost: 25_000,
+	},
+] as const satisfies readonly WallDefinition[];
+
+export type WallId = (typeof WALLS)[number]["id"];
 
 export const ORIGINAL_PRODUCER_LINEUP_SIZE = 10;
 export const HEAD_START_COUNTS = [0, 10, 25, 50, 100] as const;
@@ -364,13 +410,18 @@ export interface GameProgress {
 }
 
 export interface AchievementProgress extends GameProgress {
+	coolantTowers?: number;
 	lifetimeCans?: number;
 	prestigeLevel?: number;
+	runCans?: number;
+	ventedWalls?: string[];
 }
 
 export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	bestRunCans: number;
 	cans: number;
+	coolant: number;
+	coolantTowers: number;
 	frenzyEndsAt: number | null;
 	goldenCans: number;
 	goldenRushReadyAt: number | null;
@@ -388,6 +439,7 @@ export interface GameSnapshot extends GameProgress, GoldenRushBuffState {
 	revision: number;
 	runCans: number;
 	serverNow: number;
+	ventedWalls: string[];
 }
 
 const producerIds = new Set<string>(PRODUCERS.map(({ id }) => id));
@@ -574,6 +626,59 @@ const overchargeMultiplier = (progress: GameProgress): number =>
 	OVERCHARGE_MULTIPLIER **
 	Math.max(0, progress.goldenUpgrades["overcharge-core"]);
 
+const wallIds = new Set<string>(WALLS.map(({ id }) => id));
+
+export const isWallId = (value: string): value is WallId => wallIds.has(value);
+
+export const activeWall = (
+	progress: Pick<AchievementProgress, "runCans" | "ventedWalls">
+): WallDefinition | null => {
+	const runCans = Math.max(0, progress.runCans ?? 0);
+	const vented = progress.ventedWalls ?? [];
+	for (const wall of WALLS) {
+		if (runCans < wall.threshold) {
+			return null;
+		}
+		if (!vented.includes(wall.id)) {
+			return wall;
+		}
+	}
+	return null;
+};
+
+export const wallProductionMultiplier = (
+	progress: Pick<AchievementProgress, "runCans" | "ventedWalls">
+): number => {
+	const wall = activeWall(progress);
+	return wall ? wall.productionMultiplier : 1;
+};
+
+export const wallCoolantMultiplier = (
+	progress: Pick<AchievementProgress, "runCans" | "ventedWalls">
+): number => {
+	const wall = activeWall(progress);
+	return wall ? wall.coolantMultiplier : 1;
+};
+
+export const coolingTowerCost = (towers: number): number =>
+	clampGameValue(
+		Math.floor(
+			COOLING_TOWER_BASE_COST * COOLING_TOWER_COST_GROWTH ** Math.max(0, towers)
+		)
+	);
+
+export const coolantPerSecond = (
+	progress: Pick<
+		AchievementProgress,
+		"coolantTowers" | "runCans" | "ventedWalls"
+	>
+): number =>
+	clampGameValue(
+		Math.max(0, progress.coolantTowers ?? 0) *
+			COOLANT_PER_TOWER_PER_SEC *
+			wallCoolantMultiplier(progress)
+	);
+
 export interface AchievementDefinition {
 	description: string;
 	id: string;
@@ -712,6 +817,7 @@ export const calculateProductionCps = (
 		1 + Math.max(0, progress.totalGoldenCans) * GOLDEN_CAN_PRODUCTION_BONUS;
 	producerCps *= achievementMultiplier(progress);
 	producerCps *= overchargeMultiplier(progress);
+	producerCps *= wallProductionMultiplier(progress);
 	return clampGameValue(producerCps * reactorMultiplier(progress));
 };
 

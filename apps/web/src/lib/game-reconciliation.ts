@@ -3,6 +3,7 @@ import {
 	calculateIdleGain,
 	clampGameValue,
 	clickBuffMultiplier,
+	coolantPerSecond,
 	frenzyDurationMs,
 	frenzyMultiplier,
 	type GameSnapshot,
@@ -35,22 +36,26 @@ export const projectElapsed = (
 			? (snapshot.goldenRushBuffEndsAt ?? 0)
 			: 0;
 	const buffMs = Math.max(0, Math.min(now, buffEnd) - snapshot.lastAccruedAt);
+	const isOffline = elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS;
 	const gain = calculateIdleGain(
 		snapshot,
 		elapsedMs,
 		frenzyMs,
-		elapsedMs >= OFFLINE_ACCRUAL_THRESHOLD_MS
-			? offlineProductionMultiplier(snapshot)
-			: 1,
+		isOffline ? offlineProductionMultiplier(snapshot) : 1,
 		buffMs,
 		PRODUCTION_FRENZY_MULTIPLIER
 	);
+	const coolantGain =
+		coolantPerSecond(snapshot) *
+		(elapsedMs / 1000) *
+		(isOffline ? offlineProductionMultiplier(snapshot) : 1);
 	return {
 		...snapshot,
 		bestRunCans: clampGameValue(
 			Math.max(snapshot.bestRunCans, snapshot.runCans + gain)
 		),
 		cans: clampGameValue(snapshot.cans + gain),
+		coolant: clampGameValue(snapshot.coolant + coolantGain),
 		lastAccruedAt: now,
 		lifetimeCans: clampGameValue(snapshot.lifetimeCans + gain),
 		runCans: clampGameValue(snapshot.runCans + gain),

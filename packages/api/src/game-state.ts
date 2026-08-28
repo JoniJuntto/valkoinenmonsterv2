@@ -15,12 +15,14 @@ import {
 	type GoldenUpgradeRanks,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
+	isWallId,
 	MAX_GAME_VALUE,
 	MAX_MANUAL_CLICK_BUDGET,
 	MAX_PERSISTED_COUNTER,
 	PRODUCERS,
 	PRODUCTION_FRENZY_DURATION_MS,
 	type ProducerCounts,
+	WALLS,
 } from "./game";
 
 export type MutableGameState = Omit<
@@ -85,6 +87,21 @@ const normalizeTimer = (
 		: value;
 };
 
+const normalizeVentedWalls = (value: unknown): string[] => {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const vented = new Set(value.filter(isWallId));
+	const prefix: string[] = [];
+	for (const wall of WALLS) {
+		if (!vented.has(wall.id)) {
+			break;
+		}
+		prefix.push(wall.id);
+	}
+	return prefix;
+};
+
 export const normalizePersistedGameState = (
 	state: GameStateRow,
 	serverNow: Date
@@ -119,6 +136,8 @@ export const normalizePersistedGameState = (
 		...state,
 		bestRunCans,
 		cans,
+		coolant: clampGameValue(state.coolant),
+		coolantTowers: clampGameCounter(state.coolantTowers),
 		frenzyEndsAt: normalizeTimer(
 			state.frenzyEndsAt,
 			serverNowMs,
@@ -156,6 +175,7 @@ export const normalizePersistedGameState = (
 			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
 			: [],
 		totalGoldenCans,
+		ventedWalls: normalizeVentedWalls(state.ventedWalls),
 	};
 };
 
@@ -226,6 +246,24 @@ export const assertProgressionInvariants = (
 			state.manualClickBudget >= 0 &&
 			state.manualClickBudget <= MAX_MANUAL_CLICK_BUDGET,
 		"manual click budget must be bounded"
+	);
+	invariant(
+		Number.isFinite(state.coolant) &&
+			state.coolant >= 0 &&
+			state.coolant <= MAX_GAME_VALUE,
+		"coolant must be finite and non-negative"
+	);
+	invariant(
+		Number.isInteger(state.coolantTowers) &&
+			state.coolantTowers >= 0 &&
+			state.coolantTowers <= MAX_PERSISTED_COUNTER,
+		"cooling tower count must be valid"
+	);
+	const wallIdOrder = WALLS.map(({ id }) => id);
+	invariant(
+		state.ventedWalls.length <= wallIdOrder.length &&
+			state.ventedWalls.every((id, index) => id === wallIdOrder[index]),
+		"vented walls must be a prefix of the wall catalog"
 	);
 	invariant(
 		Number.isInteger(state.nextFrenzyClick) && state.nextFrenzyClick >= 1,

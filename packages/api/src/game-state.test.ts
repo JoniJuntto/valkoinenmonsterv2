@@ -17,6 +17,8 @@ import {
 const createRow = (): GameStateRow => ({
 	bestRunCans: 0,
 	cans: 0,
+	coolant: 0,
+	coolantTowers: 0,
 	createdAt: new Date(0),
 	frenzyEndsAt: null,
 	goldenCans: 0,
@@ -38,6 +40,7 @@ const createRow = (): GameStateRow => ({
 	totalGoldenCans: 0,
 	updatedAt: new Date(0),
 	userId: "user",
+	ventedWalls: [],
 });
 
 describe("persisted game state", () => {
@@ -77,6 +80,29 @@ describe("persisted game state", () => {
 		expect(() =>
 			assertProgressionInvariants(normalized, new Date(1000))
 		).not.toThrow();
+	});
+
+	test("repairs coolant balances and vented wall prefixes", () => {
+		const row = createRow();
+		row.coolant = Number.NaN;
+		row.coolantTowers = 2.9;
+		row.ventedWalls = ["blackout", "overheat", "unknown"];
+
+		const normalized = normalizePersistedGameState(row, new Date(0));
+
+		expect(normalized.coolant).toBe(0);
+		expect(normalized.coolantTowers).toBe(2);
+		// "blackout" is dropped, leaving the longest valid vented prefix.
+		expect(normalized.ventedWalls).toEqual(["overheat"]);
+		expect(() =>
+			assertProgressionInvariants(normalized, new Date(0))
+		).not.toThrow();
+
+		row.coolant = 42;
+		row.ventedWalls = ["overheat"];
+		const clean = normalizePersistedGameState(row, new Date(0));
+		expect(clean.coolant).toBe(42);
+		expect(clean.ventedWalls).toEqual(["overheat"]);
 	});
 
 	test("repairs future and malformed timers to canonical horizons", () => {
