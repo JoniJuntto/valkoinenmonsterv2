@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	type AchievementProgress,
 	ASCENSION_NODES,
 	acceptManualClicks,
 	activeFrenzyMultiplier,
@@ -28,13 +29,15 @@ import {
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	createStartingRunUpgrades,
+	DRAFT_CARDS,
+	DRAFT_SIZE,
 	derivedCanVariantIds,
 	FLAVOR_UPGRADES,
+	FRENZY_DRAFT_BONUS_MS,
 	FRENZY_DURATION_MS,
 	formatGameNumber,
 	frenzyDurationMs,
 	frenzyMultiplier,
-	type GameProgress,
 	GOLDEN_RUSH_DROP_CHANCE,
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_RUSH_MIN_DELAY_MS,
@@ -55,6 +58,7 @@ import {
 	producerCost,
 	productionTimeMs,
 	RUN_UPGRADES,
+	rollDraftOptions,
 	rollGoldenRushDelayMs,
 	rollGoldenRushDrop,
 	rollGoldenRushReward,
@@ -63,9 +67,10 @@ import {
 	WALLS,
 } from "./game";
 
-const createProgress = (): GameProgress => ({
+const createProgress = (): AchievementProgress => ({
 	collection: [],
 	goldenUpgrades: createInitialGoldenUpgrades(),
+	prestigeLevel: 0,
 	producers: createInitialProducers(),
 	runUpgrades: [],
 	totalGoldenCans: 0,
@@ -328,6 +333,49 @@ describe("Monster game economy", () => {
 		expect(frenzyMultiplier(progress)).toBe(30);
 		expect(frenzyDurationMs(progress)).toBe(18_000);
 		expect(offlineProductionMultiplier(progress)).toBeCloseTo(0.8);
+	});
+
+	test("rolls drafts with the tier flavor plus distinct free cards", () => {
+		const seededRandom = (values: number[]): (() => number) => {
+			let index = 0;
+			return () => {
+				const value = values[index % values.length];
+				index += 1;
+				return value === undefined ? 0 : value;
+			};
+		};
+		const options = rollDraftOptions(0, seededRandom([0.99, 0.99]));
+		expect(options).toHaveLength(DRAFT_SIZE);
+		expect(options[0]).toBe(FLAVOR_UPGRADES[0]?.id);
+		expect(new Set(options).size).toBe(DRAFT_SIZE);
+		for (const id of options.slice(1)) {
+			expect(DRAFT_CARDS.some((card) => card.id === id)).toBe(true);
+		}
+		// Same seed, same draft; another seed, different order of niche cards.
+		expect(rollDraftOptions(0, seededRandom([0.99, 0.99]))).toEqual(options);
+		expect(rollDraftOptions(3, seededRandom([0, 0])).slice(1)).not.toEqual(
+			options.slice(1)
+		);
+	});
+
+	test("keeps draft cards free, draft-only, and bound to real producers", () => {
+		for (const card of DRAFT_CARDS) {
+			expect(card.cost).toBe(0);
+			expect(RUN_UPGRADES.some(({ id }) => id === card.id)).toBe(false);
+			if (card.kind === "grant") {
+				expect(PRODUCERS.some(({ id }) => id === card.producerId)).toBe(true);
+				expect(card.grantQuantity ?? 0).toBeGreaterThan(0);
+			}
+		}
+		expect(DRAFT_CARDS.length).toBeGreaterThanOrEqual(DRAFT_SIZE - 1);
+	});
+
+	test("extends frenzy duration with draft cards", () => {
+		const progress = createProgress();
+		progress.runUpgrades.push("draft-frenzy-chug");
+		expect(frenzyDurationMs(progress)).toBe(
+			FRENZY_DURATION_MS + FRENZY_DRAFT_BONUS_MS
+		);
 	});
 
 	test("multiplies production by overcharge ranks", () => {

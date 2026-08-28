@@ -37,6 +37,8 @@ import {
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	createStartingRunUpgrades,
+	DRAFT_SIZE,
+	FLAVOR_UPGRADES,
 	FRENZY_STACK_BONUS,
 	frenzyDurationMs,
 	type GameProgress,
@@ -50,6 +52,7 @@ import {
 	goldenUpgradeCost,
 	goldenUpgradeUnlockLevel,
 	isAscensionNodeId,
+	isDraftOnlyKind,
 	isGoldenUpgradeId,
 	isProducerId,
 	MAX_FRENZY_STACKS,
@@ -63,7 +66,9 @@ import {
 	producerBulkCost,
 	producerCost,
 	RUN_UPGRADES,
+	type RunUpgradeDefinition,
 	randomFrenzyThreshold,
+	rollDraftOptions,
 	rollGoldenRushDelayMs,
 	rollGoldenRushDrop,
 	rollGoldenRushReward,
@@ -108,6 +113,17 @@ export const agentGameCommandSchema = z.discriminatedUnion("action", [
 		.object({
 			action: z.literal("buy_upgrade"),
 			upgradeId: z.string(),
+			...agentOperationId,
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("pick_draft"),
+			optionIndex: z
+				.number()
+				.int()
+				.min(0)
+				.max(DRAFT_SIZE - 1),
 			...agentOperationId,
 		})
 		.strict(),
@@ -173,13 +189,17 @@ export const createDefaultGameState = (
 		ascensionSparks: 0,
 		bestRunCans: 0,
 		cans: 0,
+
 		coolant: 0,
 		coolantTowers: 0,
+		draftTier: 0,
 		frenzyStacks: 0,
 		goldenCans: 0,
 		lifetimeCans: 0,
 		prestigeLevel: 0,
 		runCans: 0,
+		runDraft: null,
+
 		totalAscensionSparks: 0,
 		userId,
 		...progress,
@@ -333,6 +353,18 @@ const accrueStateWithResult = (
 		manualClickBudget: remainingBudget,
 		nextFrenzyClick,
 	};
+	const { draftTier: nextTierIndex, runDraft: pendingDraft } = nextState;
+	const nextTier = FLAVOR_UPGRADES[nextTierIndex];
+	if (
+		pendingDraft === null &&
+		nextTier !== undefined &&
+		nextState.cans >= nextTier.cost
+	) {
+		nextState = {
+			...nextState,
+			runDraft: rollDraftOptions(nextTierIndex, secureRandom),
+		};
+	}
 	return { acceptedClicks, state: nextState };
 };
 
@@ -353,8 +385,10 @@ const toSnapshot = (
 	bestRunCans: state.bestRunCans,
 	cans: state.cans,
 	collection: state.collection,
+
 	coolant: state.coolant,
 	coolantTowers: state.coolantTowers,
+	draftTier: state.draftTier,
 	frenzyEndsAt: state.frenzyEndsAt?.getTime() ?? null,
 	frenzyStacks: state.frenzyStacks,
 	goldenCans: state.goldenCans,
@@ -372,6 +406,7 @@ const toSnapshot = (
 	producers: state.producers,
 	revision: state.revision,
 	runCans: state.runCans,
+	runDraft: state.runDraft,
 	runUpgrades: state.runUpgrades,
 	serverNow,
 	totalAscensionSparks: state.totalAscensionSparks,
@@ -679,6 +714,12 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 	if (!upgrade) {
 		throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown upgrade" });
 	}
+	if (isDraftOnlyKind(upgrade.kind)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "That upgrade is only offered in flavor drafts",
+		});
+	}
 	return (state) => {
 		const producerOwned = upgrade.producerId
 			? state.producers[upgrade.producerId]
@@ -703,6 +744,58 @@ export const buyUpgrade = (upgradeId: string): GameMutation => {
 		};
 	};
 };
+
+const unknownDraftOption = () =>
+	new TRPCError({
+		code: "BAD_REQUEST",
+		message: "Unknown draft option",
+	});
+
+const applyDraftPick = (
+	state: MutableGameState,
+	card: RunUpgradeDefinition
+): MutableGameState => {
+	const nextState = {
+		...state,
+		draftTier: state.draftTier + 1,
+		runDraft: null,
+	};
+	if (card.kind === "grant") {
+		if (!card.producerId) {
+			throw unknownDraftOption();
+		}
+		nextState.producers = {
+			...nextState.producers,
+			[card.producerId]:
+				nextState.producers[card.producerId] + (card.grantQuantity ?? 1),
+		};
+		return nextState;
+	}
+	const isFlavor = card.kind === "flavor";
+	if (isFlavor && nextState.cans < card.cost) {
+		throw insufficientFunds();
+	}
+	nextState.cans = isFlavor ? nextState.cans - card.cost : nextState.cans;
+	nextState.runUpgrades = [...nextState.runUpgrades, card.id];
+	return nextState;
+};
+
+export const pickDraft =
+	(optionIndex: number): GameMutation =>
+	(state) => {
+		const options = state.runDraft;
+		if (!options || optionIndex < 0 || optionIndex >= options.length) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "No flavor draft available",
+			});
+		}
+		const card = getRunUpgrade(options[optionIndex] ?? "");
+		if (!(card && isDraftOnlyKind(card.kind))) {
+			throw unknownDraftOption();
+		}
+		return applyDraftPick(state, card);
+	};
 
 export const buyAscensionNode = (nodeId: string): GameMutation => {
 	if (!isAscensionNodeId(nodeId)) {
@@ -825,13 +918,17 @@ export const prestige: GameMutation = (state) => {
 		ascensionSparks: clampGameCounter(state.ascensionSparks + sparkGain),
 		bestRunCans: Math.max(state.bestRunCans, state.runCans),
 		cans: 0,
+
 		coolantTowers: 0,
+		draftTier: 0,
 		frenzyEndsAt: null,
 		frenzyStacks: 0,
 		goldenCans: clampGameCounter(state.goldenCans + reward),
 		nextFrenzyClick: randomFrenzyThreshold(nextProgress, secureRandom()),
 		prestigeLevel: clampGameCounter(state.prestigeLevel + 1),
 		runCans: 0,
+		runDraft: null,
+
 		totalAscensionSparks: clampGameCounter(
 			state.totalAscensionSparks + sparkGain
 		),
@@ -931,6 +1028,24 @@ export const gameRouter = router({
 	getState: protectedProcedure.query(({ ctx }) =>
 		getGameState(ctx.session.user.id, sessionIsAnonymous(ctx.session))
 	),
+	pickDraft: protectedProcedure
+		.input(
+			mutationInput.extend({
+				optionIndex: z
+					.number()
+					.int()
+					.min(0)
+					.max(DRAFT_SIZE - 1),
+			})
+		)
+		.mutation(({ ctx, input }) =>
+			mutateGameState(
+				ctx.session.user.id,
+				sessionIsAnonymous(ctx.session),
+				input,
+				pickDraft(input.optionIndex)
+			)
+		),
 	prestige: protectedProcedure
 		.input(mutationInput)
 		.mutation(async ({ ctx, input }) => {
@@ -1071,7 +1186,9 @@ export interface AgentGameActionResult {
 	acceptedClicks?: number;
 	action: AgentGameCommand["action"];
 	advancedMilliseconds?: number;
+
 	nodeId?: string;
+	optionIndex?: number;
 	producerId?: string;
 	rejectedClicks?: number;
 	replayed: boolean;
@@ -1102,7 +1219,9 @@ export const createAgentGameObservation = (
 			owned,
 		};
 	});
-	const runUpgrades = RUN_UPGRADES.map((upgrade) => {
+	const runUpgrades = RUN_UPGRADES.filter(
+		(upgrade) => !isDraftOnlyKind(upgrade.kind)
+	).map((upgrade) => {
 		const producerOwned = upgrade.producerId
 			? state.producers[upgrade.producerId]
 			: 0;
@@ -1141,6 +1260,25 @@ export const createAgentGameObservation = (
 			unlockLevel,
 		};
 	});
+	const draftOptions = (state.runDraft ?? []).flatMap((id) => {
+		const card = getRunUpgrade(id);
+		if (!(card && isDraftOnlyKind(card.kind))) {
+			return [];
+		}
+		return [
+			{
+				cost: card.cost,
+				description: card.description,
+				id: card.id,
+				kind: card.kind,
+				name: card.name,
+			},
+		];
+	});
+	const draft = state.runDraft
+		? { options: draftOptions, tier: state.draftTier }
+		: null;
+
 	const ascensionNodes = ASCENSION_NODES.map((node) => {
 		const rank = state.ascensionNodes[node.id as AscensionNodeId] ?? 0;
 		const cost = ascensionNodeCost(node.id as AscensionNodeId, rank);
@@ -1191,6 +1329,16 @@ export const createAgentGameObservation = (
 			});
 		}
 	}
+	if (draft) {
+		for (const optionIndex of draft.options.keys()) {
+			legalActions.push({
+				action: "pick_draft",
+				operationId: crypto.randomUUID(),
+				optionIndex,
+			});
+		}
+	}
+
 	if (state.cans >= towerCost) {
 		legalActions.push({
 			action: "buy_cooling_tower",
@@ -1225,6 +1373,7 @@ export const createAgentGameObservation = (
 	});
 
 	return {
+		draft,
 		leaderboard: leaderboard.slice(0, 10),
 		legalActions,
 		result,
@@ -1283,6 +1432,9 @@ const mutationForAgentCommand = (command: AgentGameCommand): GameMutation => {
 	if (command.action === "buy_upgrade") {
 		return buyUpgrade(command.upgradeId);
 	}
+	if (command.action === "pick_draft") {
+		return pickDraft(command.optionIndex);
+	}
 	if (command.action === "buy_cooling_tower") {
 		return buyCoolingTower;
 	}
@@ -1332,6 +1484,9 @@ const resultForAgentCommand = (
 	}
 	if (command.action === "buy_upgrade") {
 		return { ...base, upgradeId: command.upgradeId };
+	}
+	if (command.action === "pick_draft") {
+		return { ...base, optionIndex: command.optionIndex };
 	}
 	if (command.action === "buy_ascension_node") {
 		return { ...base, nodeId: command.nodeId };

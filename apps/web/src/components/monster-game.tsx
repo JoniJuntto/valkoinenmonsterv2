@@ -23,14 +23,17 @@ import {
 	coolantPerSecond,
 	coolingTowerCost,
 	countUnlockedAchievements,
+	FLAVOR_UPGRADES,
 	formatGameNumber,
 	frenzyDurationMs,
 	type GameSnapshot,
 	GOLDEN_CAN_BASE,
 	GOLDEN_UPGRADES,
 	type GoldenRushReward,
+	getRunUpgrade,
 	goldenUpgradeCost,
 	goldenUpgradeUnlockLevel,
+	isDraftOnlyKind,
 	isGoldenUpgradeId,
 	MAX_FRENZY_STACKS,
 	nextGoldenCanRequirement,
@@ -141,6 +144,7 @@ type MutationActionName =
 	| "sync"
 	| "buy_producer"
 	| "buy_upgrade"
+	| "pick_draft"
 	| "buy_cooling_tower"
 	| "vent_wall"
 	| "buy_ascension_node"
@@ -151,6 +155,7 @@ type MutationActionName =
 interface MutationOptions {
 	action: MutationActionName;
 	nodeId?: string;
+	optionIndex?: number;
 	producerId?: ProducerId;
 	producerQuantity?: number;
 	producerSource?: "manual" | "smart_stocker";
@@ -216,6 +221,23 @@ const trackMutationSuccess = (
 					cost: upgrade?.cost ?? 0,
 					upgrade_id: options.upgradeId,
 				});
+			}
+			break;
+		}
+		case "pick_draft": {
+			const optionId = before.runDraft?.[options.optionIndex ?? -1];
+			const card = optionId ? getRunUpgrade(optionId) : undefined;
+			if (!card) {
+				break;
+			}
+			track(AnalyticsEvents.game.draftPicked, {
+				cost: card.cost,
+				option_id: card.id,
+				option_kind: card.kind,
+				tier: before.draftTier,
+			});
+			if (card.kind === "grant") {
+				toast.success(card.name, { description: card.description });
 			}
 			break;
 		}
@@ -314,6 +336,9 @@ const selectVisibleRunUpgrades = (
 	const producersWithMilestone = new Set<ProducerId>();
 	for (const upgrade of runUpgradesByCost) {
 		if (game.runUpgrades.includes(upgrade.id)) {
+			continue;
+		}
+		if (isDraftOnlyKind(upgrade.kind)) {
 			continue;
 		}
 		if (upgrade.kind === "milestone") {
@@ -619,6 +644,7 @@ interface ShopCardProps {
 	onBuyProducer: (producerId: ProducerId) => void;
 	onBuyUpgrade: (upgradeId: string) => void;
 	onChangeBuyQuantity: (quantity: BuyQuantity) => void;
+	onPickDraft: (optionIndex: number) => void;
 	onToggleSmartStocker: () => void;
 }
 
@@ -631,6 +657,7 @@ const ShopCard = ({
 	onBuyProducer,
 	onBuyUpgrade,
 	onChangeBuyQuantity,
+	onPickDraft,
 	onToggleSmartStocker,
 }: ShopCardProps) => {
 	const handleProducerClick = useCallback(
@@ -662,6 +689,15 @@ const ShopCard = ({
 		},
 		[onBuyUpgrade]
 	);
+	const handleDraftClick = useCallback(
+		(event: MouseEvent<HTMLButtonElement>) => {
+			const optionIndex = Number(event.currentTarget.dataset.optionIndex);
+			if (Number.isInteger(optionIndex)) {
+				onPickDraft(optionIndex);
+			}
+		},
+		[onPickDraft]
+	);
 
 	const handleAscensionClick = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
@@ -685,6 +721,48 @@ const ShopCard = ({
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="monster-shop flex max-h-[75svh] flex-col gap-6 overflow-y-auto">
+				{game.runDraft ? (
+					<section className="flex flex-col gap-2 bg-monster-gold/10 p-3 ring-2 ring-monster-gold/60">
+						<h2 className="font-display text-base uppercase tracking-wide">
+							Flavor draft
+						</h2>
+						<p className="text-muted-foreground">
+							Pick exactly one — the other two cards are gone for this run.
+						</p>
+						<ul className="flex flex-col gap-2">
+							{game.runDraft.map((optionId, optionIndex) => {
+								const card = getRunUpgrade(optionId);
+								if (!card) {
+									return null;
+								}
+								const isFlavor = card.kind === "flavor";
+								const isAffordable = game.cans >= card.cost;
+								return (
+									<li className="bg-muted/30 p-3" key={optionId}>
+										<div className="flex items-center justify-between gap-3">
+											<div>
+												<h3 className="font-medium">{card.name}</h3>
+												<p className="text-muted-foreground">
+													{card.description}
+												</p>
+											</div>
+											<Button
+												data-option-index={optionIndex}
+												disabled={isSaving || !isAffordable}
+												onClick={handleDraftClick}
+												size="sm"
+												variant={isAffordable ? "default" : "outline"}
+											>
+												{isFlavor ? formatGameNumber(card.cost) : "Free"}
+											</Button>
+										</div>
+									</li>
+								);
+							})}
+						</ul>
+					</section>
+				) : null}
+
 				<section className="flex flex-col gap-2">
 					<div className="flex items-center justify-between gap-2">
 						<h2 className="font-display text-base uppercase tracking-wide">
@@ -749,6 +827,13 @@ const ShopCard = ({
 					<h2 className="font-display text-base uppercase tracking-wide">
 						Run upgrades
 					</h2>
+					{!game.runDraft && game.draftTier < FLAVOR_UPGRADES.length ? (
+						<p className="text-muted-foreground">
+							Next flavor draft unlocks at{" "}
+							{formatGameNumber(FLAVOR_UPGRADES[game.draftTier]?.cost ?? 0)}{" "}
+							cans.
+						</p>
+					) : null}
 					<ul className="flex flex-col gap-2">
 						{selectVisibleRunUpgrades(game).map((upgrade) => {
 							const producerOwned = upgrade.producerId
@@ -1346,6 +1431,9 @@ export const MonsterGame = () => {
 	const { mutateAsync: buyUpgradeMutation } = useMutation(
 		trpc.game.buyUpgrade.mutationOptions()
 	);
+	const { mutateAsync: pickDraftMutation } = useMutation(
+		trpc.game.pickDraft.mutationOptions()
+	);
 	const { mutateAsync: buyAscensionNodeMutation } = useMutation(
 		trpc.game.buyAscensionNode.mutationOptions()
 	);
@@ -1780,6 +1868,15 @@ export const MonsterGame = () => {
 		[buyUpgradeMutation, performMutation]
 	);
 
+	const pickDraftNow = useCallback(
+		(optionIndex: number) =>
+			performMutation((input) => pickDraftMutation({ ...input, optionIndex }), {
+				action: "pick_draft",
+				optionIndex,
+			}),
+		[pickDraftMutation, performMutation]
+	);
+
 	const buyAscensionNodeNow = useCallback(
 		(nodeId: string) =>
 			performMutation(
@@ -2016,6 +2113,12 @@ export const MonsterGame = () => {
 		},
 		[buyUpgradeNow]
 	);
+	const handlePickDraft = useCallback(
+		(optionIndex: number) => {
+			pickDraftNow(optionIndex).catch(() => undefined);
+		},
+		[pickDraftNow]
+	);
 	const handleBuyAscensionNode = useCallback(
 		(nodeId: string) => {
 			buyAscensionNodeNow(nodeId).catch(() => undefined);
@@ -2070,6 +2173,7 @@ export const MonsterGame = () => {
 				onBuyProducer={handleBuyProducer}
 				onBuyUpgrade={handleBuyUpgrade}
 				onChangeBuyQuantity={changeBuyQuantity}
+				onPickDraft={handlePickDraft}
 				onToggleSmartStocker={toggleSmartStocker}
 			/>
 			<LeaderboardCard

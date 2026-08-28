@@ -24,6 +24,7 @@ export const AnalyticsEvents = {
 		codexSetCompleted: "game.codex.set_completed",
 		codexVariantUnlocked: "game.codex.variant_unlocked",
 		coolingTowerPurchased: "game.coolant.tower_purchased",
+		draftPicked: "game.draft.picked",
 		error: "game.error",
 		frenzyEnded: "game.frenzy.ended",
 		frenzyStarted: "game.frenzy.started",
