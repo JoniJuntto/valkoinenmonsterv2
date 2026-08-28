@@ -127,6 +127,37 @@ export const PRODUCERS = [
 export type ProducerId = (typeof PRODUCERS)[number]["id"];
 export type ProducerCounts = Record<ProducerId, number>;
 
+export const SYNERGY_BONUS_PER_OWNED = 0.01;
+
+// Every producer boosts exactly one different producer by
+// SYNERGY_BONUS_PER_OWNED per unit owned (a permutation with no fixed
+// points), so what you buy shapes what your cheaper producers are worth.
+export const PRODUCER_SYNERGIES = {
+	"caffeine-nebula": "white-hole",
+	"can-portal": "monster-galaxy",
+	"can-warehouse": "filling-line",
+	"corner-shop": "can-warehouse",
+	"cosmic-six-pack": "taurine-comet",
+	"dimension-dispenser": "time-brewery",
+	"filling-line": "monster-mine",
+	"mini-fridge": "vending-machine",
+	"monster-galaxy": "cosmic-six-pack",
+	"monster-mine": "white-reactor",
+	"monster-singularity": "can-portal",
+	"pull-tab": "corner-shop",
+	"taurine-comet": "caffeine-nebula",
+	"the-beast": "mini-fridge",
+	"time-brewery": "the-beast",
+	"vending-machine": "pull-tab",
+	"white-hole": "dimension-dispenser",
+	"white-reactor": "monster-singularity",
+} as const satisfies Record<ProducerId, ProducerId>;
+
+export const PRODUCER_SYNERGY_SOURCES: Record<ProducerId, ProducerId> =
+	Object.fromEntries(
+		PRODUCERS.map(({ id }) => [PRODUCER_SYNERGIES[id], id])
+	) as Record<ProducerId, ProducerId>;
+
 export const ORIGINAL_PRODUCER_LINEUP_SIZE = 10;
 export const HEAD_START_COUNTS = [0, 10, 25, 50, 100] as const;
 
@@ -282,7 +313,7 @@ export const GOLDEN_UPGRADES = [
 	{
 		baseCost: 40,
 		description:
-			"Buy the cheapest affordable producer every 5 seconds while open",
+			"Buy the best-value producer every 5 seconds while open (weighs synergies)",
 		id: "smart-stocker",
 		maxRank: 1,
 		name: "Smart Stocker",
@@ -510,22 +541,36 @@ export const producerBulkCost = (
 	return clampGameValue(total);
 };
 
-export const cheapestAffordableProducer = (
+// Smart Stocker picks the affordable producer with the best marginal
+// production gain per can (including synergy gains), not the cheapest one.
+export const bestStockerPurchase = (
 	progress: GameProgress,
 	cans: number
 ): ProducerId | null => {
-	let cheapestId: ProducerId | null = null;
-	let cheapestCost = MAX_GAME_VALUE;
+	const baseCps = calculateProductionCps(progress);
+	let bestId: ProducerId | null = null;
+	let bestValue = 0;
 
 	for (const producer of PRODUCERS) {
 		const cost = producerCost(producer.id, progress.producers[producer.id]);
-		if (cost <= cans && cost < cheapestCost) {
-			cheapestCost = cost;
-			cheapestId = producer.id;
+		if (cost > cans) {
+			continue;
+		}
+		const candidate: GameProgress = {
+			...progress,
+			producers: {
+				...progress.producers,
+				[producer.id]: progress.producers[producer.id] + 1,
+			},
+		};
+		const value = (calculateProductionCps(candidate) - baseCps) / cost;
+		if (value > bestValue) {
+			bestValue = value;
+			bestId = producer.id;
 		}
 	}
 
-	return cheapestId;
+	return bestId;
 };
 
 export const goldenUpgradeCost = (
@@ -805,12 +850,22 @@ const achievementMultiplier = (progress: AchievementProgress): number =>
 export const calculateProductionCps = (
 	progress: AchievementProgress
 ): number => {
+	const synergyMultiplier = createInitialProducers();
+	for (const producer of PRODUCERS) {
+		synergyMultiplier[producer.id] = 1;
+	}
+	for (const producer of PRODUCERS) {
+		const target = PRODUCER_SYNERGIES[producer.id];
+		synergyMultiplier[target] +=
+			progress.producers[producer.id] * SYNERGY_BONUS_PER_OWNED;
+	}
 	let producerCps = 0;
 	for (const producer of PRODUCERS) {
 		producerCps +=
 			producer.baseCps *
 			progress.producers[producer.id] *
-			producerMultiplier(progress, producer.id);
+			producerMultiplier(progress, producer.id) *
+			synergyMultiplier[producer.id];
 	}
 	producerCps *= 2 ** countRunUpgradesOfKind(progress, "flavor");
 	producerCps *= 1 + progress.goldenUpgrades["endless-chill"] * 0.15;

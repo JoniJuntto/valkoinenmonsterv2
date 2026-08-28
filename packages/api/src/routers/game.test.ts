@@ -310,9 +310,11 @@ describe("JSON agent game mode", () => {
 		const stocked = createDefaultGameState("stocked", now);
 		stocked.cans = 1000;
 		stocked.goldenUpgrades["smart-stocker"] = 1;
+		// Tick 1: Mini Fridge (100 cans, 1 CPS) beats Pull Tab (15, 0.1 CPS) on
+		// value; tick 2 accrues 5 cans of production, then buys Fridge #2 (115).
 		const autoPurchased = advanceOpenState(stocked, 10_000, now);
-		expect(autoPurchased.producers["pull-tab"]).toBe(2);
-		expect(autoPurchased.cans).toBe(968.5);
+		expect(autoPurchased.producers["mini-fridge"]).toBe(2);
+		expect(autoPurchased.cans).toBe(791);
 	});
 
 	test("rebases simulated Golden Rush timers to real server time", () => {

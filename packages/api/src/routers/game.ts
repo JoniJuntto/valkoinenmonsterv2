@@ -13,11 +13,11 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
 	acceptManualClicks,
+	bestStockerPurchase,
 	CLICK_RUSH_MULTIPLIER,
 	calculateClickValue,
 	calculateCps,
 	calculateIdleGain,
-	cheapestAffordableProducer,
 	clampGameCounter,
 	clampGameValue,
 	createHeadStartProducers,
@@ -38,6 +38,7 @@ import {
 	nextGoldenCanRequirement,
 	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
+	PRODUCER_SYNERGIES,
 	PRODUCERS,
 	PRODUCTION_FRENZY_MULTIPLIER,
 	prestigeReward,
@@ -487,7 +488,7 @@ export const advanceOpenState = (
 		simulatedNow += AGENT_HEARTBEAT_MS;
 		nextState = accrueState(nextState, 0, new Date(simulatedNow));
 		if (nextState.goldenUpgrades["smart-stocker"] > 0) {
-			const producerId = cheapestAffordableProducer(nextState, nextState.cans);
+			const producerId = bestStockerPurchase(nextState, nextState.cans);
 			if (producerId) {
 				nextState = buyProducer(producerId)(nextState, new Date(simulatedNow));
 			}
@@ -862,6 +863,7 @@ export const createAgentGameObservation = (
 		return {
 			affordable: state.cans >= cost,
 			baseCps: producer.baseCps,
+			boosts: PRODUCER_SYNERGIES[producer.id],
 			cost,
 			id: producer.id,
 			name: producer.name,
