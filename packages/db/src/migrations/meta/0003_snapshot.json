@@ -1,6 +1,6 @@
 {
-  "id": "13666888-7b2c-4c75-9072-4d1f86b6b03a",
-  "prevId": "f13e8c70-170a-432b-99ae-6e048e49a007",
+  "id": "139c37df-09a3-4759-8b91-f97db9f98fb3",
+  "prevId": "13666888-7b2c-4c75-9072-4d1f86b6b03a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -358,6 +358,20 @@
       "name": "game_state",
       "schema": "",
       "columns": {
+        "ascension_nodes": {
+          "name": "ascension_nodes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "ascension_sparks": {
+          "name": "ascension_sparks",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "best_run_cans": {
           "name": "best_run_cans",
           "type": "double precision",
@@ -384,6 +398,13 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "frenzy_stacks": {
+          "name": "frenzy_stacks",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "golden_cans": {
           "name": "golden_cans",
@@ -488,6 +509,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "total_ascension_sparks": {
+          "name": "total_ascension_sparks",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "total_golden_cans": {
           "name": "total_golden_cans",

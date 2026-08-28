@@ -1,9 +1,13 @@
 import type { GameStateRow } from "@valkoinenmonsterv2/db/schema/game";
 
 import {
+	ASCENSION_NODES,
+	type AscensionNodeId,
+	type AscensionNodeRanks,
 	CLICK_RUSH_DURATION_MS,
 	clampGameCounter,
 	clampGameValue,
+	createInitialAscensionNodes,
 	createInitialGoldenUpgrades,
 	createInitialProducers,
 	FRENZY_CHRONOMETER_BONUS_MS,
@@ -15,6 +19,7 @@ import {
 	type GoldenUpgradeRanks,
 	isGoldenRushBuffKind,
 	isRunUpgradeId,
+	MAX_FRENZY_STACKS,
 	MAX_GAME_VALUE,
 	MAX_MANUAL_CLICK_BUDGET,
 	MAX_PERSISTED_COUNTER,
@@ -25,9 +30,12 @@ import {
 
 export type MutableGameState = Omit<
 	GameStateRow,
-	"producers" | "goldenUpgrades" | "goldenRushBuffKind"
+	"producers" | "goldenUpgrades" | "goldenRushBuffKind" | "ascensionNodes"
 > &
-	GameProgress & { goldenRushBuffKind: GoldenRushBuffKind | null };
+	GameProgress & {
+		ascensionNodes: AscensionNodeRanks;
+		goldenRushBuffKind: GoldenRushBuffKind | null;
+	};
 
 const finiteInteger = (
 	value: number,
@@ -72,6 +80,22 @@ const normalizeGoldenUpgrades = (value: unknown): GoldenUpgradeRanks => {
 	return upgrades;
 };
 
+const normalizeAscensionNodes = (value: unknown): AscensionNodeRanks => {
+	const nodes = createInitialAscensionNodes();
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return nodes;
+	}
+	const stored = value as Record<string, unknown>;
+	for (const node of ASCENSION_NODES) {
+		const rank = stored[node.id];
+		nodes[node.id as AscensionNodeId] = finiteInteger(
+			typeof rank === "number" ? rank : 0,
+			node.maxRank
+		);
+	}
+	return nodes;
+};
+
 const normalizeTimer = (
 	value: Date | null,
 	serverNowMs: number,
@@ -103,28 +127,45 @@ export const normalizePersistedGameState = (
 		clampGameCounter(state.totalGoldenCans)
 	);
 	const goldenUpgrades = normalizeGoldenUpgrades(state.goldenUpgrades);
+	const ascensionNodes = normalizeAscensionNodes(state.ascensionNodes);
+	const frenzyAllowanceMs =
+		FRENZY_DURATION_MS +
+		goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS;
+	const frenzyEndsAt = normalizeTimer(
+		state.frenzyEndsAt,
+		serverNowMs,
+		ascensionNodes["frenzy-stacking"] > 0
+			? frenzyAllowanceMs * MAX_FRENZY_STACKS
+			: frenzyAllowanceMs
+	);
 	const goldenRushBuffKind =
 		state.goldenRushBuffKind && isGoldenRushBuffKind(state.goldenRushBuffKind)
 			? state.goldenRushBuffKind
 			: null;
 	const buffDurationMs =
-		goldenRushBuffKind === "click_rush"
+		(goldenRushBuffKind === "click_rush"
 			? CLICK_RUSH_DURATION_MS
-			: PRODUCTION_FRENZY_DURATION_MS;
+			: PRODUCTION_FRENZY_DURATION_MS) *
+		(ascensionNodes["golden-echo"] > 0 ? 2 : 1);
 	const goldenRushBuffEndsAt = goldenRushBuffKind
 		? normalizeTimer(state.goldenRushBuffEndsAt, serverNowMs, buffDurationMs)
 		: null;
 
+	const totalAscensionSparks = clampGameCounter(state.totalAscensionSparks);
+
 	return {
 		...state,
+		ascensionNodes,
+		ascensionSparks: Math.min(
+			clampGameCounter(state.ascensionSparks),
+			totalAscensionSparks
+		),
 		bestRunCans,
 		cans,
-		frenzyEndsAt: normalizeTimer(
-			state.frenzyEndsAt,
-			serverNowMs,
-			FRENZY_DURATION_MS +
-				goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS
-		),
+		frenzyEndsAt,
+		frenzyStacks: frenzyEndsAt
+			? finiteInteger(state.frenzyStacks, MAX_FRENZY_STACKS)
+			: 0,
 		goldenCans,
 		goldenRushBuffEndsAt,
 		goldenRushBuffKind: goldenRushBuffEndsAt ? goldenRushBuffKind : null,
@@ -155,6 +196,7 @@ export const normalizePersistedGameState = (
 		runUpgrades: Array.isArray(state.runUpgrades)
 			? [...new Set(state.runUpgrades.filter(isRunUpgradeId))]
 			: [],
+		totalAscensionSparks,
 		totalGoldenCans,
 	};
 };
@@ -222,6 +264,22 @@ export const assertProgressionInvariants = (
 		"golden upgrade ranks must match the catalog"
 	);
 	invariant(
+		Object.keys(state.ascensionNodes).length === ASCENSION_NODES.length &&
+			ASCENSION_NODES.every(({ id, maxRank }) => {
+				const rank = state.ascensionNodes[id as AscensionNodeId] ?? 0;
+				return Number.isInteger(rank) && rank >= 0 && rank <= maxRank;
+			}),
+		"ascension node ranks must match the catalog"
+	);
+	invariant(
+		Number.isInteger(state.ascensionSparks) &&
+			state.ascensionSparks >= 0 &&
+			Number.isInteger(state.totalAscensionSparks) &&
+			state.totalAscensionSparks <= MAX_PERSISTED_COUNTER &&
+			state.ascensionSparks <= state.totalAscensionSparks,
+		"ascension spark balances must be valid"
+	);
+	invariant(
 		Number.isFinite(state.manualClickBudget) &&
 			state.manualClickBudget >= 0 &&
 			state.manualClickBudget <= MAX_MANUAL_CLICK_BUDGET,
@@ -230,6 +288,13 @@ export const assertProgressionInvariants = (
 	invariant(
 		Number.isInteger(state.nextFrenzyClick) && state.nextFrenzyClick >= 1,
 		"next frenzy click must be a positive integer"
+	);
+	invariant(
+		Number.isInteger(state.frenzyStacks) &&
+			state.frenzyStacks >= 0 &&
+			state.frenzyStacks <= MAX_FRENZY_STACKS &&
+			(state.frenzyStacks === 0) === (state.frenzyEndsAt === null),
+		"frenzy stacks must pair with the frenzy timer"
 	);
 	invariant(
 		validDate(state.lastAccruedAt) &&
@@ -244,8 +309,10 @@ export const assertProgressionInvariants = (
 	const serverNowMs = serverNow.getTime();
 	const maximumFrenzyEnd =
 		serverNowMs +
-		FRENZY_DURATION_MS +
-		state.goldenUpgrades["frenzy-chronometer"] * FRENZY_CHRONOMETER_BONUS_MS;
+		(FRENZY_DURATION_MS +
+			state.goldenUpgrades["frenzy-chronometer"] *
+				FRENZY_CHRONOMETER_BONUS_MS) *
+			(state.ascensionNodes["frenzy-stacking"] > 0 ? MAX_FRENZY_STACKS : 1);
 	invariant(
 		state.frenzyEndsAt === null ||
 			(validDate(state.frenzyEndsAt) &&
@@ -260,9 +327,10 @@ export const assertProgressionInvariants = (
 		"golden rush readiness must use the canonical horizon"
 	);
 	const maximumBuffDuration =
-		state.goldenRushBuffKind === "click_rush"
+		(state.goldenRushBuffKind === "click_rush"
 			? CLICK_RUSH_DURATION_MS
-			: PRODUCTION_FRENZY_DURATION_MS;
+			: PRODUCTION_FRENZY_DURATION_MS) *
+		(state.ascensionNodes["golden-echo"] > 0 ? 2 : 1);
 	invariant(
 		state.goldenRushBuffEndsAt === null ||
 			(validDate(state.goldenRushBuffEndsAt) &&
