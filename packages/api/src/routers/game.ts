@@ -65,6 +65,7 @@ import {
 	isProducerId,
 	isWorldUnlocked,
 	MAX_FRENZY_STACKS,
+	nextDraftTier,
 	nextGoldenCanRequirement,
 	OFFLINE_ACCRUAL_THRESHOLD_MS,
 	offlineProductionMultiplier,
@@ -372,18 +373,29 @@ const accrueStateWithResult = (
 		manualClickBudget: remainingBudget,
 		nextFrenzyClick,
 	};
-	const { draftTier: nextTierIndex, runDraft: pendingDraft } = nextState;
+	const nextTierIndex = nextDraftTier(
+		nextState.draftTier,
+		nextState.runUpgrades
+	);
+	// A stored draft can offer something the player already owns (rolled before
+	// the tier skip, or a card picked since); drop it so it re-rolls.
+	const pendingDraft =
+		nextState.runDraft?.every((id) => !nextState.runUpgrades.includes(id)) ===
+		true
+			? nextState.runDraft
+			: null;
 	const nextTier = FLAVOR_UPGRADES[nextTierIndex];
-	if (
+	const rolled =
 		pendingDraft === null &&
 		nextTier !== undefined &&
 		nextState.cans >= nextTier.cost
-	) {
-		nextState = {
-			...nextState,
-			runDraft: rollDraftOptions(nextTierIndex, secureRandom),
-		};
-	}
+			? rollDraftOptions(nextTierIndex, secureRandom, nextState.runUpgrades)
+			: pendingDraft;
+	nextState = {
+		...nextState,
+		draftTier: nextTierIndex,
+		runDraft: rolled && rolled.length > 0 ? rolled : null,
+	};
 	return { acceptedClicks, state: nextState };
 };
 

@@ -12,6 +12,7 @@ import {
 	offerContract,
 	producerBulkCost,
 } from "../game";
+import { assertProgressionInvariants } from "../game-state";
 
 process.env.BETTER_AUTH_SECRET = "test-secret-that-is-at-least-32-chars";
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
@@ -175,6 +176,50 @@ describe("server-authoritative mutations", () => {
 		// The pending draft survives later accruals without re-rolling.
 		const settled = accrueState(rolled, 0, new Date(2000));
 		expect(settled.runDraft).toEqual(rolled.runDraft);
+	});
+
+	test("never drafts a flavor the run already owns", () => {
+		// Legacy saves bought flavors in the shop while draftTier stayed at 0;
+		// re-offering one duplicated it on pick and tripped the invariant.
+		const state = createDefaultGameState("user", new Date(0));
+		state.runUpgrades = ["ultra-white", "ultra-blue"];
+		state.cans = 1e12;
+		state.runCans = 1e12;
+		state.bestRunCans = 1e12;
+		state.lifetimeCans = 1e12;
+		state.runDraft = [
+			"ultra-white",
+			"draft-spare-pull-tabs",
+			"draft-fridge-restock",
+		];
+		const rolled = accrueState(state, 0, new Date(1000));
+		expect(rolled.draftTier).toBe(2);
+		expect(rolled.runDraft?.[0]).toBe(FLAVOR_UPGRADES[2]?.id);
+		expect(rolled.runDraft).not.toContain("ultra-white");
+		const picked = pickDraft(0)(rolled, new Date(1000));
+		expect(picked.runUpgrades.length).toBe(new Set(picked.runUpgrades).size);
+		expect(() =>
+			assertProgressionInvariants(picked, new Date(1000))
+		).not.toThrow();
+	});
+
+	test("drops a stored draft holding an owned card and stops when flavors run out", () => {
+		const state = createDefaultGameState("user", new Date(0));
+		state.runUpgrades = ["draft-frenzy-chug"];
+		state.runDraft = [
+			"draft-frenzy-chug",
+			"draft-spare-pull-tabs",
+			"draft-fridge-restock",
+		];
+		const dropped = accrueState(state, 0, new Date(1000));
+		expect(dropped.runDraft).toBeNull();
+
+		const maxed = createDefaultGameState("user", new Date(0));
+		maxed.runUpgrades = FLAVOR_UPGRADES.map(({ id }) => id);
+		maxed.cans = 1e21;
+		const done = accrueState(maxed, 0, new Date(1000));
+		expect(done.draftTier).toBe(FLAVOR_UPGRADES.length);
+		expect(done.runDraft).toBeNull();
 	});
 
 	test("picking the flavor card charges the tier price", () => {

@@ -581,17 +581,35 @@ export const DRAFT_CARDS: RunUpgradeDefinition[] = [
 export const isDraftOnlyKind = (kind: RunUpgradeKind): boolean =>
 	kind === "flavor" || kind === "grant" || kind === "frenzy-duration";
 
+// Flavors used to be shop upgrades, so old saves own some while their tier
+// counter still points at them. Skip past everything already owned: offering
+// an owned upgrade would duplicate it on pick and trip the run-upgrade
+// invariant.
+export const nextDraftTier = (tier: number, runUpgrades: string[]): number => {
+	let index = Math.max(0, tier);
+	while (
+		index < FLAVOR_UPGRADES.length &&
+		runUpgrades.includes(FLAVOR_UPGRADES[index]?.id ?? "")
+	) {
+		index += 1;
+	}
+	return index;
+};
+
 // The draft always offers the tier's flavor (strong, costs the tier price)
 // plus two random distinct free cards from the niche pool.
+// ponytail: only "frenzy-duration" cards are ownable (grants repeat), so the
+// filter can drop at most one card and the pool still fills DRAFT_SIZE - 1.
 export const rollDraftOptions = (
 	tier: number,
-	random: () => number
+	random: () => number,
+	runUpgrades: string[] = []
 ): string[] => {
 	const flavor = FLAVOR_UPGRADES[Math.max(0, tier)];
-	if (!flavor) {
+	if (!flavor || runUpgrades.includes(flavor.id)) {
 		return [];
 	}
-	const niche = [...DRAFT_CARDS];
+	const niche = DRAFT_CARDS.filter((card) => !runUpgrades.includes(card.id));
 	const picked: string[] = [];
 	for (let count = 0; count < DRAFT_SIZE - 1 && niche.length > 0; count += 1) {
 		const index = Math.floor(random() * niche.length);
