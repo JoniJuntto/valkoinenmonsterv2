@@ -20,6 +20,12 @@ export const gameState = pgTable("game_state", {
 	bestRunCans: doublePrecision("best_run_cans").default(0).notNull(),
 	cans: doublePrecision("cans").default(0).notNull(),
 	collection: jsonb("collection").$type<string[]>().notNull().default([]),
+	completedContracts: jsonb("completed_contracts")
+		.$type<string[]>()
+		.default([])
+		.notNull(),
+	contract: jsonb("contract").$type<unknown>(),
+	contractCompletions: integer("contract_completions").default(0).notNull(),
 	coolant: doublePrecision("coolant").default(0).notNull(),
 	coolantTowers: integer("coolant_towers").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })

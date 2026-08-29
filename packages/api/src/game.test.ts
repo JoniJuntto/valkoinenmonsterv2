@@ -4,6 +4,7 @@ import {
 	type AchievementProgress,
 	ASCENSION_NODES,
 	acceptManualClicks,
+	activateContract,
 	activeFrenzyMultiplier,
 	activeWall,
 	ascensionNodeCost,
@@ -12,6 +13,7 @@ import {
 	ascensionReward,
 	bestStockerPurchase,
 	CAN_VARIANTS,
+	type ContractRuntime,
 	COLLECTION_SETS,
 	calculateClickValue,
 	calculateCps,
@@ -43,6 +45,8 @@ import {
 	GOLDEN_RUSH_MAX_DELAY_MS,
 	GOLDEN_RUSH_MIN_DELAY_MS,
 	GOLDEN_UPGRADES,
+	getContract,
+	getRunUpgrade,
 	goldenCanPotential,
 	goldenUpgradeCost,
 	goldenUpgradeUnlockLevel,
@@ -52,6 +56,7 @@ import {
 	MAX_GAME_VALUE,
 	MAX_PERSISTED_COUNTER,
 	nextGoldenCanRequirement,
+	offerContract,
 	offlineProductionMultiplier,
 	PRODUCER_SYNERGIES,
 	PRODUCERS,
@@ -66,6 +71,7 @@ import {
 	rollGoldenRushReward,
 	unionCollection,
 	unlockedAchievementIds,
+	updateContracts,
 	WALLS,
 	WORLDS,
 } from "./game";
@@ -734,5 +740,128 @@ describe("collection codex", () => {
 		for (const flavor of FLAVOR_UPGRADES) {
 			expect(variantIds.has(flavor.id)).toBe(true);
 		}
+	});
+});
+
+describe("contract system", () => {
+	const createContractState = () => {
+		const progress = createProgress();
+		return {
+			...progress,
+			completedContracts: [] as string[],
+			contract: null as ContractRuntime | null,
+			contractCompletions: 0,
+			goldenCans: 0,
+			prestigeLevel: 0,
+			runCans: 0,
+		};
+	};
+
+	test("offers only prestige-appropriate, non-completed contracts", () => {
+		const offer = offerContract(0, [], [], 0);
+		expect(offer?.status).toBe("offered");
+		expect(getContract(offer?.id ?? "")?.minPrestige).toBe(0);
+		const lowTierIds = ["warmup-chug", "tab-acrobat", "stocking-spree"];
+		const withOwnedReward = offerContract(0, [], ["golden-tab"], 0);
+		expect(withOwnedReward?.id).not.toBe("tab-acrobat");
+		expect(offerContract(0, lowTierIds, [], 0.5)).toBeNull();
+		const highOffer = offerContract(9, lowTierIds, [], 0);
+		expect(getContract(highOffer?.id ?? "")?.minPrestige).toBeGreaterThan(0);
+	});
+
+	test("completes a run-cans contract and pays golden cans", () => {
+		const state = createContractState();
+		state.contract = activateContract("warmup-chug", 0, 0, 0);
+		state.runCans = 100_000;
+		const { outcome, state: next } = updateContracts(
+			state,
+			{ acceptedClicks: 0, frenzyActive: false },
+			1000,
+			0
+		);
+		expect(outcome).toEqual({
+			completedContractId: "warmup-chug",
+			failed: false,
+		});
+		expect(next.goldenCans).toBe(2);
+		expect(next.totalGoldenCans).toBe(2);
+		expect(next.contractCompletions).toBe(1);
+		expect(next.completedContracts).toEqual(["warmup-chug"]);
+		expect(next.contract?.status).toBe("offered");
+		expect(next.contract?.id).not.toBe("warmup-chug");
+	});
+
+	test("expires a timed contract without rewards", () => {
+		const state = createContractState();
+		state.contract = activateContract("warmup-chug", 0, 0, 0);
+		state.runCans = 99_999;
+		const { outcome, state: next } = updateContracts(
+			state,
+			{ acceptedClicks: 0, frenzyActive: false },
+			600_001,
+			0
+		);
+		expect(outcome).toEqual({ completedContractId: null, failed: true });
+		expect(next.goldenCans).toBe(0);
+		expect(next.contractCompletions).toBe(0);
+		expect(next.contract?.status).toBe("offered");
+	});
+
+	test("counts frenzy clicks only while a frenzy is active and grants the unique upgrade", () => {
+		const state = createContractState();
+		state.contract = activateContract("tab-acrobat", 0, 0, 0);
+		const withFrenzy = updateContracts(
+			state,
+			{ acceptedClicks: 120, frenzyActive: true },
+			1000,
+			0
+		).state;
+		expect(withFrenzy.contract?.frenzyClicks).toBe(120);
+		const withoutFrenzy = updateContracts(
+			withFrenzy,
+			{ acceptedClicks: 50, frenzyActive: false },
+			2000,
+			0
+		).state;
+		expect(withoutFrenzy.contract?.frenzyClicks).toBe(120);
+		const done = updateContracts(
+			withoutFrenzy,
+			{ acceptedClicks: 100, frenzyActive: true },
+			3000,
+			0
+		);
+		expect(done.outcome.completedContractId).toBe("tab-acrobat");
+		expect(done.state.runUpgrades).toContain("golden-tab");
+		expect(calculateClickValue(done.state)).toBe(2);
+		expect(done.state.contract?.id).not.toBe("tab-acrobat");
+	});
+
+	test("completes producer contracts only when prestige happens with enough owned", () => {
+		const state = createContractState();
+		state.contract = activateContract("stocking-spree", 0, 0, 0);
+		state.producers["pull-tab"] = 50;
+		const noPrestige = updateContracts(
+			state,
+			{ acceptedClicks: 0, frenzyActive: false },
+			1000,
+			0
+		);
+		expect(noPrestige.outcome.completedContractId).toBeNull();
+		expect(noPrestige.state.contract?.id).toBe("stocking-spree");
+		state.prestigeLevel = 1;
+		const done = updateContracts(
+			state,
+			{ acceptedClicks: 0, frenzyActive: false },
+			2000,
+			0
+		);
+		expect(done.outcome.completedContractId).toBe("stocking-spree");
+		expect(done.state.contract?.status).toBe("offered");
+	});
+
+	test("registers reward upgrades for grades but keeps them out of the shop", () => {
+		expect(getRunUpgrade("baristas-secret")?.kind).toBe("flavor");
+		expect(getRunUpgrade("momentum")?.kind).toBe("cps-click");
+		expect(RUN_UPGRADES.some(({ id }) => id === "baristas-secret")).toBe(false);
 	});
 });
