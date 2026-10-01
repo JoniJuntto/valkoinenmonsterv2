@@ -9,14 +9,6 @@ import {
 	seasonProducerCost,
 } from "@valkoinenmonsterv2/api/seasons";
 import { Button } from "@valkoinenmonsterv2/ui/components/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardFooter,
-	CardHeader,
-	CardTitle,
-} from "@valkoinenmonsterv2/ui/components/card";
 import { cn } from "@valkoinenmonsterv2/ui/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnalyticsEvents } from "@/lib/analytics/events";
@@ -51,51 +43,6 @@ const useNowTick = (intervalMs: number): number => {
 		return () => window.clearInterval(timer);
 	}, [intervalMs]);
 	return nowMs;
-};
-
-const SEASON_CARD_ID = "season-event";
-
-export const SeasonBanner = () => {
-	const trpc = useTRPC();
-	const overviewQuery = useQuery({
-		...trpc.season.current.queryOptions(),
-		refetchInterval: 30_000,
-	});
-	const overview = overviewQuery.data;
-	const nowMs = useNowTick(1000);
-	if (!overview) {
-		return null;
-	}
-	const { season, viewerRank } = overview;
-	return (
-		<a
-			className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 xl:col-span-3"
-			href={`#${SEASON_CARD_ID}`}
-			onClick={() => {
-				track(AnalyticsEvents.season.bannerClicked, {
-					season_id: season.id,
-					theme_id: season.themeId,
-				});
-			}}
-		>
-			<span className="flex min-w-0 items-center gap-2">
-				<span
-					aria-hidden
-					className="size-2 shrink-0 animate-pulse rounded-full bg-amber-400"
-				/>
-				<span className="font-display truncate text-sm uppercase leading-none tracking-wide">
-					{season.name} live
-				</span>
-				<span className="hidden text-muted-foreground text-sm sm:inline">
-					· fixed rules, no golden upgrades
-				</span>
-			</span>
-			<span className="shrink-0 text-right text-sm tabular-nums">
-				{viewerRank !== null && `You're #${viewerRank} · `}
-				ends in {formatCountdown(season.endsAt - nowMs)}
-			</span>
-		</a>
-	);
 };
 
 export const SeasonPanel = ({ isAnonymous, viewerId }: SeasonPanelProps) => {
@@ -224,162 +171,147 @@ export const SeasonPanel = ({ isAnonymous, viewerId }: SeasonPanelProps) => {
 	};
 
 	return (
-		<Card className="order-6 self-start scroll-mt-4" id={SEASON_CARD_ID}>
-			<CardHeader>
-				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-					Season Event: {season.name}
-				</CardTitle>
-				<CardDescription>
-					{season.tagline} Everyone starts equal — no golden upgrades. Ends in{" "}
-					{formatCountdown(season.endsAt - nowMs)}.
-				</CardDescription>
-			</CardHeader>
-			<CardContent className="flex flex-col gap-4">
-				<div className="flex items-center justify-between gap-2">
-					<div>
-						<p className="font-medium tabular-nums">
-							{formatGameNumber(snapshot.score)} season cans
-						</p>
-						<p className="text-muted-foreground text-sm tabular-nums">
-							{formatGameNumber(cps)}/s · #{overview.viewerRank ?? "—"} of{" "}
-							{overview.leaderboard.length > 0 ? "50" : "1"} ranked players
-						</p>
-					</div>
-					<Button onClick={handleTap} size="lg" type="button">
-						Tap (+{formatGameNumber(clickValue)})
-					</Button>
+		<div className="flex flex-col gap-4">
+			<div>
+				<h2 className="font-display text-base uppercase tracking-wide">
+					{season.name} · ends in {formatCountdown(season.endsAt - nowMs)}
+				</h2>
+				<p className="text-muted-foreground">
+					{season.tagline} Everyone starts equal, no golden upgrades.
+				</p>
+			</div>
+			<div className="flex items-center justify-between gap-2">
+				<div>
+					<p className="font-medium tabular-nums">
+						{formatGameNumber(snapshot.score)} season cans
+					</p>
+					<p className="text-muted-foreground text-sm tabular-nums">
+						{formatGameNumber(cps)}/s · #{overview.viewerRank ?? "—"} of{" "}
+						{overview.leaderboard.length > 0 ? "50" : "1"} ranked players
+					</p>
 				</div>
+				<Button onClick={handleTap} size="lg" type="button">
+					Tap (+{formatGameNumber(clickValue)})
+				</Button>
+			</div>
 
-				<section aria-label="Season exclusive producers">
-					<h3 className="mb-1 font-medium text-sm uppercase">
-						Exclusive producers
-					</h3>
-					<ul className="flex flex-col gap-1">
-						{theme.producers.map((producer) => {
-							const owned = snapshot.producers[producer.id] ?? 0;
-							const cost = seasonProducerCost(producer, owned);
-							const affordable = snapshot.cans >= cost;
-							return (
-								<li
-									className="flex items-center justify-between gap-2"
-									key={producer.id}
-								>
-									<span>
-										{producer.name}{" "}
-										<span className="text-muted-foreground">
-											×{owned} · {formatGameNumber(producer.baseCps)}/s
-										</span>
+			<section aria-label="Season exclusive producers">
+				<h3 className="mb-1 font-medium text-sm uppercase">
+					Exclusive producers
+				</h3>
+				<ul className="flex flex-col gap-1">
+					{theme.producers.map((producer) => {
+						const owned = snapshot.producers[producer.id] ?? 0;
+						const cost = seasonProducerCost(producer, owned);
+						const affordable = snapshot.cans >= cost;
+						return (
+							<li
+								className="flex items-center justify-between gap-2"
+								key={producer.id}
+							>
+								<span>
+									{producer.name}{" "}
+									<span className="text-muted-foreground">
+										×{owned} · {formatGameNumber(producer.baseCps)}/s
 									</span>
+								</span>
+								<Button
+									disabled={!affordable}
+									onClick={() => void handleBuyProducer(producer.id)}
+									size="sm"
+									type="button"
+									variant={affordable ? "default" : "outline"}
+								>
+									{formatGameNumber(cost)}
+								</Button>
+							</li>
+						);
+					})}
+				</ul>
+			</section>
+
+			<section aria-label="Season exclusive upgrades">
+				<h3 className="mb-1 font-medium text-sm uppercase">
+					Exclusive upgrades
+				</h3>
+				<ul className="flex flex-col gap-1">
+					{theme.upgrades.map((upgrade) => {
+						const owned = snapshot.upgrades.includes(upgrade.id);
+						const affordable = snapshot.cans >= upgrade.cost;
+						return (
+							<li
+								className={cn(
+									"flex items-center justify-between gap-2",
+									owned && "bg-muted/30"
+								)}
+								key={upgrade.id}
+							>
+								<span>
+									{owned ? "★" : "☆"} {upgrade.name}{" "}
+									<span className="text-muted-foreground">
+										{upgrade.description}
+									</span>
+								</span>
+								{owned ? (
+									<span className="text-muted-foreground text-sm">Owned</span>
+								) : (
 									<Button
 										disabled={!affordable}
-										onClick={() => void handleBuyProducer(producer.id)}
+										onClick={() => void handleBuyUpgrade(upgrade.id)}
 										size="sm"
 										type="button"
 										variant={affordable ? "default" : "outline"}
 									>
-										{formatGameNumber(cost)}
+										{formatGameNumber(upgrade.cost)}
 									</Button>
-								</li>
-							);
-						})}
-					</ul>
-				</section>
+								)}
+							</li>
+						);
+					})}
+				</ul>
+			</section>
 
-				<section aria-label="Season exclusive upgrades">
-					<h3 className="mb-1 font-medium text-sm uppercase">
-						Exclusive upgrades
-					</h3>
-					<ul className="flex flex-col gap-1">
-						{theme.upgrades.map((upgrade) => {
-							const owned = snapshot.upgrades.includes(upgrade.id);
-							const affordable = snapshot.cans >= upgrade.cost;
-							return (
-								<li
-									className={cn(
-										"flex items-center justify-between gap-2",
-										owned && "bg-muted/30"
-									)}
-									key={upgrade.id}
-								>
-									<span>
-										{owned ? "★" : "☆"} {upgrade.name}{" "}
-										<span className="text-muted-foreground">
-											{upgrade.description}
-										</span>
-									</span>
-									{owned ? (
-										<span className="text-muted-foreground text-sm">Owned</span>
-									) : (
-										<Button
-											disabled={!affordable}
-											onClick={() => void handleBuyUpgrade(upgrade.id)}
-											size="sm"
-											type="button"
-											variant={affordable ? "default" : "outline"}
-										>
-											{formatGameNumber(upgrade.cost)}
-										</Button>
-									)}
-								</li>
-							);
-						})}
-					</ul>
-				</section>
-
-				<section aria-label="Season leaderboard">
-					<h3 className="mb-1 font-medium text-sm uppercase">
-						Season leaderboard
-					</h3>
-					{overview.leaderboard.length === 0 ? (
-						<p className="text-muted-foreground">
-							No ranked players yet this season.
-						</p>
-					) : (
-						<ol className="flex flex-col gap-1">
-							{overview.leaderboard.slice(0, 10).map((entry) => (
-								<li
-									className={cn(
-										"grid grid-cols-[2rem_1fr_auto] items-center gap-2 p-1",
-										entry.userId === viewerId && "bg-muted"
-									)}
-									key={entry.userId}
-								>
-									<span className="text-muted-foreground tabular-nums">
-										#{entry.rank}
-									</span>
-									<span className="truncate">{entry.name}</span>
-									<span className="text-right tabular-nums">
-										{formatGameNumber(entry.score)}
-									</span>
-								</li>
-							))}
-						</ol>
-					)}
-				</section>
-			</CardContent>
+			<section aria-label="Season leaderboard">
+				<h3 className="mb-1 font-medium text-sm uppercase">
+					Season leaderboard
+				</h3>
+				{overview.leaderboard.length === 0 ? (
+					<p className="text-muted-foreground">
+						No ranked players yet this season.
+					</p>
+				) : (
+					<ol className="flex flex-col gap-1">
+						{overview.leaderboard.slice(0, 10).map((entry) => (
+							<li
+								className={cn(
+									"grid grid-cols-[2rem_1fr_auto] items-center gap-2 p-1",
+									entry.userId === viewerId && "bg-muted"
+								)}
+								key={entry.userId}
+							>
+								<span className="text-muted-foreground tabular-nums">
+									#{entry.rank}
+								</span>
+								<span className="truncate">{entry.name}</span>
+								<span className="text-right tabular-nums">
+									{formatGameNumber(entry.score)}
+								</span>
+							</li>
+						))}
+					</ol>
+				)}
+			</section>
 			{isAnonymous ? (
-				<CardFooter>
-					<Link className="w-full" to="/login">
-						<Button className="w-full" type="button">
-							Claim progress to compete
-						</Button>
-					</Link>
-				</CardFooter>
+				<Link className="w-full" to="/login">
+					<Button className="w-full" type="button">
+						Claim progress to compete
+					</Button>
+				</Link>
 			) : null}
-		</Card>
+		</div>
 	);
 };
 
 const SeasonPanelSkeleton = () => (
-	<Card className="order-6 self-start scroll-mt-4" id={SEASON_CARD_ID}>
-		<CardHeader>
-			<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-				Season Event
-			</CardTitle>
-			<CardDescription>Loading the current event…</CardDescription>
-		</CardHeader>
-		<CardContent className="flex flex-col gap-2">
-			<div className="h-16" />
-		</CardContent>
-	</Card>
+	<p className="text-muted-foreground">Loading the current event…</p>
 );

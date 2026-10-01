@@ -65,9 +65,16 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@valkoinenmonsterv2/ui/components/card";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "@valkoinenmonsterv2/ui/components/dropdown-menu";
 import { Skeleton } from "@valkoinenmonsterv2/ui/components/skeleton";
 import { cn } from "@valkoinenmonsterv2/ui/lib/utils";
-import { Volume2Icon, VolumeXIcon } from "lucide-react";
+import { MenuIcon, Volume2Icon, VolumeXIcon } from "lucide-react";
 import {
 	type MouseEvent,
 	useCallback,
@@ -76,7 +83,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
-import { SeasonBanner, SeasonPanel } from "@/components/season-panel";
+import { SeasonPanel } from "@/components/season-panel";
 import {
 	bucketCans,
 	bucketCps,
@@ -343,6 +350,14 @@ const PRODUCER_NAME_BY_ID = new Map(
 	ALL_PRODUCERS.map(({ id, name }) => [id, name])
 );
 const SYNERGY_PERCENT = SYNERGY_BONUS_PER_OWNED * 100;
+const PANEL_TABS = [
+	{ id: "shop", label: "Shop" },
+	{ id: "prestige", label: "Prestige" },
+	{ id: "collection", label: "Collection" },
+	{ id: "ranks", label: "Ranks" },
+	{ id: "season", label: "Season" },
+] as const;
+type PanelTabId = (typeof PANEL_TABS)[number]["id"];
 
 const selectVisibleProducers = (game: GameSnapshot, world: WorldDefinition) => {
 	let highestOwnedIndex = -1;
@@ -467,7 +482,7 @@ const StatsCard = ({
 	const previousRequirement =
 		game.totalGoldenCans > 0 ? GOLDEN_CAN_BASE * game.totalGoldenCans ** 2 : 0;
 	return (
-		<Card className="order-2 gap-0 self-start py-0 ring-foreground xl:col-start-1 xl:row-start-1">
+		<Card className="gap-0 py-0 ring-foreground">
 			<div className="p-(--card-spacing) pb-3">
 				<h2 className="font-display text-3xl uppercase leading-none tracking-wide">
 					Ravintosisältö
@@ -496,15 +511,22 @@ const StatsCard = ({
 							{formatGameNumber(calculateCps(game))}
 						</dd>
 					</div>
-					{NUTRITION_ROWS.map((row) => (
-						<div
-							className="flex items-baseline justify-between gap-2 border-foreground/20 border-b py-1.5"
-							key={row.label}
-						>
-							<dt>{row.label}</dt>
-							<dd className="tabular-nums">{row.value(game)}</dd>
-						</div>
-					))}
+					{NUTRITION_ROWS.map((row) => {
+						const value = row.value(game);
+						// ponytail: zero rows are noise until the mechanic is reached
+						if (value === "0" || value === "+0%") {
+							return null;
+						}
+						return (
+							<div
+								className="flex items-baseline justify-between gap-2 border-foreground/20 border-b py-1.5"
+								key={row.label}
+							>
+								<dt>{row.label}</dt>
+								<dd className="tabular-nums">{value}</dd>
+							</div>
+						);
+					})}
 				</dl>
 				<div className="mt-1 border-foreground border-t-8 pt-2">
 					<div className="flex justify-between gap-2">
@@ -578,7 +600,7 @@ const CanCard = ({
 	return (
 		<Card
 			className={cn(
-				"order-1 overflow-visible bg-transparent ring-0 xl:col-start-2 xl:row-span-2 xl:row-start-1",
+				"overflow-visible bg-transparent ring-0",
 				isFrenzyActive && "monster-frenzy-card"
 			)}
 		>
@@ -664,31 +686,25 @@ const CanCard = ({
 	);
 };
 
-interface ShopCardProps {
+interface ShopPanelProps {
 	buyQuantity: BuyQuantity;
 	game: GameSnapshot;
 	isSaving: boolean;
-	isSmartStockerEnabled: boolean;
-	onBuyAscensionNode: (nodeId: string) => void;
 	onBuyProducer: (producerId: ProducerId) => void;
 	onBuyUpgrade: (upgradeId: string) => void;
 	onChangeBuyQuantity: (quantity: BuyQuantity) => void;
 	onPickDraft: (optionIndex: number) => void;
-	onToggleSmartStocker: () => void;
 }
 
-const ShopCard = ({
+const ShopPanel = ({
 	buyQuantity,
 	game,
 	isSaving,
-	isSmartStockerEnabled,
-	onBuyAscensionNode,
 	onBuyProducer,
 	onBuyUpgrade,
 	onChangeBuyQuantity,
 	onPickDraft,
-	onToggleSmartStocker,
-}: ShopCardProps) => {
+}: ShopPanelProps) => {
 	const handleProducerClick = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
 			const { dataset } = event.currentTarget;
@@ -728,345 +744,350 @@ const ShopCard = ({
 		[onPickDraft]
 	);
 
+	return (
+		<>
+			{game.runDraft ? (
+				<section className="flex flex-col gap-2 bg-monster-gold/10 p-3 ring-2 ring-monster-gold/60">
+					<h2 className="font-display text-base uppercase tracking-wide">
+						Flavor draft
+					</h2>
+					<p className="text-muted-foreground">
+						Pick exactly one — the other two cards are gone for this run.
+					</p>
+					<ul className="flex flex-col gap-2">
+						{game.runDraft.map((optionId, optionIndex) => {
+							const card = getRunUpgrade(optionId);
+							if (!card) {
+								return null;
+							}
+							const isFlavor = card.kind === "flavor";
+							const isAffordable = game.cans >= card.cost;
+							return (
+								<li className="bg-muted/30 p-3" key={optionId}>
+									<div className="flex items-center justify-between gap-3">
+										<div>
+											<h3 className="font-medium">{card.name}</h3>
+											<p className="text-muted-foreground">
+												{card.description}
+											</p>
+										</div>
+										<Button
+											data-option-index={optionIndex}
+											disabled={isSaving || !isAffordable}
+											onClick={handleDraftClick}
+											size="sm"
+											variant={isAffordable ? "default" : "outline"}
+										>
+											{isFlavor ? formatGameNumber(card.cost) : "Free"}
+										</Button>
+									</div>
+								</li>
+							);
+						})}
+					</ul>
+				</section>
+			) : null}
+
+			<section className="flex flex-col gap-2">
+				<div className="flex items-center justify-between gap-2">
+					<h2 className="font-display text-base uppercase tracking-wide">
+						Producers
+					</h2>
+					<div className="flex gap-1">
+						{BUY_QUANTITIES.map((quantity) => (
+							<Button
+								aria-pressed={buyQuantity === quantity}
+								data-quantity={quantity}
+								key={quantity}
+								onClick={handleQuantityClick}
+								size="sm"
+								variant={buyQuantity === quantity ? "default" : "outline"}
+							>
+								×{quantity}
+							</Button>
+						))}
+					</div>
+				</div>
+				{WORLDS.map((world) => {
+					const isWorldOpen = isWorldUnlocked(world, game.prestigeLevel);
+					return (
+						<div className="flex flex-col gap-2" key={world.id}>
+							<h3 className="font-display text-muted-foreground text-sm uppercase tracking-wide">
+								{world.name}
+								{isWorldOpen
+									? null
+									: ` — unlocks at prestige ${world.unlockPrestige}`}
+							</h3>
+							{isWorldOpen ? (
+								<ul className="flex flex-col gap-2">
+									{selectVisibleProducers(game, world).map((producer) => {
+										const owned = game.producers[producer.id];
+										const cost = producerBulkCost(
+											producer.id,
+											owned,
+											buyQuantity
+										);
+										const boostsName = PRODUCER_NAME_BY_ID.get(
+											PRODUCER_SYNERGIES[producer.id]
+										);
+										const boostedByName = PRODUCER_NAME_BY_ID.get(
+											PRODUCER_SYNERGY_SOURCES[producer.id]
+										);
+										return (
+											<li
+												className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+												key={producer.id}
+												title={`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
+											>
+												<div>
+													<h4 className="font-medium">{producer.name}</h4>
+													<p className="text-muted-foreground">
+														{owned} owned · {formatGameNumber(producer.baseCps)}{" "}
+														base CPS
+													</p>
+												</div>
+												<Button
+													data-producer-id={producer.id}
+													disabled={isSaving || game.cans < cost}
+													onClick={handleProducerClick}
+													size="sm"
+													variant={game.cans < cost ? "outline" : "default"}
+												>
+													{formatGameNumber(cost)}
+												</Button>
+											</li>
+										);
+									})}
+								</ul>
+							) : null}
+						</div>
+					);
+				})}
+			</section>
+
+			<section className="flex flex-col gap-2">
+				<h2 className="font-display text-base uppercase tracking-wide">
+					Run upgrades
+				</h2>
+				{!game.runDraft && game.draftTier < FLAVOR_UPGRADES.length ? (
+					<p className="text-muted-foreground">
+						Next flavor draft unlocks at{" "}
+						{formatGameNumber(FLAVOR_UPGRADES[game.draftTier]?.cost ?? 0)} cans.
+					</p>
+				) : null}
+				<ul className="flex flex-col gap-2">
+					{selectVisibleRunUpgrades(game).map((upgrade) => {
+						const producerOwned = upgrade.producerId
+							? game.producers[upgrade.producerId]
+							: 0;
+						const producerName = upgrade.producerId
+							? ALL_PRODUCERS.find(({ id }) => id === upgrade.producerId)?.name
+							: undefined;
+						const isUnlocked =
+							upgrade.requiredOwned === undefined ||
+							producerOwned >= upgrade.requiredOwned;
+						return (
+							<li
+								className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+								key={upgrade.id}
+							>
+								<div>
+									<h3 className="font-medium">{upgrade.name}</h3>
+									<p className="text-muted-foreground">
+										{isUnlocked
+											? upgrade.description
+											: `Own ${upgrade.requiredOwned}× ${producerName} — buy them under Producers above`}
+									</p>
+								</div>
+								<Button
+									data-upgrade-id={upgrade.id}
+									disabled={isSaving || !isUnlocked || game.cans < upgrade.cost}
+									onClick={handleUpgradeClick}
+									size="sm"
+									variant={
+										isUnlocked && game.cans >= upgrade.cost
+											? "default"
+											: "outline"
+									}
+								>
+									{formatGameNumber(upgrade.cost)}
+								</Button>
+							</li>
+						);
+					})}
+				</ul>
+			</section>
+		</>
+	);
+};
+
+interface PrestigePanelProps {
+	game: GameSnapshot;
+	isSaving: boolean;
+	isSmartStockerEnabled: boolean;
+	onBuyAscensionNode: (nodeId: string) => void;
+	onBuyUpgrade: (upgradeId: string) => void;
+	onToggleSmartStocker: () => void;
+}
+
+const PrestigePanel = ({
+	game,
+	isSaving,
+	isSmartStockerEnabled,
+	onBuyAscensionNode,
+	onBuyUpgrade,
+	onToggleSmartStocker,
+}: PrestigePanelProps) => {
+	const handleUpgradeClick = useCallback(
+		(event: MouseEvent<HTMLButtonElement>) => {
+			const { upgradeId } = event.currentTarget.dataset;
+			if (upgradeId) {
+				onBuyUpgrade(upgradeId);
+			}
+		},
+		[onBuyUpgrade]
+	);
 	const handleAscensionClick = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
-			const { dataset } = event.currentTarget;
-			const { ascensionId } = dataset;
+			const { ascensionId } = event.currentTarget.dataset;
 			if (ascensionId) {
 				onBuyAscensionNode(ascensionId);
 			}
 		},
 		[onBuyAscensionNode]
 	);
-
 	return (
-		<Card className="order-3 xl:col-start-3 xl:row-span-2 xl:row-start-1">
-			<CardHeader>
-				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-					Can shop
-				</CardTitle>
-				<CardDescription>
-					Production, run boosts, and permanent golden upgrades.
-				</CardDescription>
-			</CardHeader>
-			<CardContent className="monster-shop flex max-h-[75svh] flex-col gap-6 overflow-y-auto">
-				{game.runDraft ? (
-					<section className="flex flex-col gap-2 bg-monster-gold/10 p-3 ring-2 ring-monster-gold/60">
-						<h2 className="font-display text-base uppercase tracking-wide">
-							Flavor draft
-						</h2>
-						<p className="text-muted-foreground">
-							Pick exactly one — the other two cards are gone for this run.
-						</p>
-						<ul className="flex flex-col gap-2">
-							{game.runDraft.map((optionId, optionIndex) => {
-								const card = getRunUpgrade(optionId);
-								if (!card) {
-									return null;
-								}
-								const isFlavor = card.kind === "flavor";
-								const isAffordable = game.cans >= card.cost;
-								return (
-									<li className="bg-muted/30 p-3" key={optionId}>
-										<div className="flex items-center justify-between gap-3">
-											<div>
-												<h3 className="font-medium">{card.name}</h3>
-												<p className="text-muted-foreground">
-													{card.description}
-												</p>
-											</div>
-											<Button
-												data-option-index={optionIndex}
-												disabled={isSaving || !isAffordable}
-												onClick={handleDraftClick}
-												size="sm"
-												variant={isAffordable ? "default" : "outline"}
-											>
-												{isFlavor ? formatGameNumber(card.cost) : "Free"}
-											</Button>
-										</div>
-									</li>
-								);
-							})}
-						</ul>
-					</section>
-				) : null}
-
-				<section className="flex flex-col gap-2">
-					<div className="flex items-center justify-between gap-2">
-						<h2 className="font-display text-base uppercase tracking-wide">
-							Producers
-						</h2>
-						<div className="flex gap-1">
-							{BUY_QUANTITIES.map((quantity) => (
-								<Button
-									aria-pressed={buyQuantity === quantity}
-									data-quantity={quantity}
-									key={quantity}
-									onClick={handleQuantityClick}
-									size="sm"
-									variant={buyQuantity === quantity ? "default" : "outline"}
-								>
-									×{quantity}
-								</Button>
-							))}
+		<>
+			<section className="flex flex-col gap-2">
+				<h2 className="font-display text-base uppercase tracking-wide">
+					Golden upgrades
+				</h2>
+				{game.goldenUpgrades["smart-stocker"] > 0 ? (
+					<div className="flex items-center justify-between gap-3 bg-muted/30 p-3">
+						<div>
+							<h3 className="font-medium">Smart Stocker auto-buy</h3>
+							<p className="text-muted-foreground">
+								{isSmartStockerEnabled
+									? "Buying the cheapest producer every 5 seconds"
+									: "Paused — cans pile up untouched"}
+							</p>
 						</div>
+						<Button
+							aria-pressed={isSmartStockerEnabled}
+							onClick={onToggleSmartStocker}
+							size="sm"
+							variant={isSmartStockerEnabled ? "default" : "outline"}
+						>
+							{isSmartStockerEnabled ? "On" : "Off"}
+						</Button>
 					</div>
-					{WORLDS.map((world) => {
-						const isWorldOpen = isWorldUnlocked(world, game.prestigeLevel);
+				) : null}
+				<ul className="flex flex-col gap-2">
+					{GOLDEN_UPGRADES.map((upgrade) => {
+						const rank = game.goldenUpgrades[upgrade.id];
+						const cost = goldenUpgradeCost(upgrade.id, rank);
+						const unlockLevel = goldenUpgradeUnlockLevel(
+							upgrade,
+							game.ascensionNodes
+						);
+						const isUnlocked = game.prestigeLevel >= unlockLevel;
+						const isMaxed = rank >= upgrade.maxRank;
 						return (
-							<div className="flex flex-col gap-2" key={world.id}>
-								<h3 className="font-display text-muted-foreground text-sm uppercase tracking-wide">
-									{world.name}
-									{isWorldOpen
-										? null
-										: ` — unlocks at prestige ${world.unlockPrestige}`}
-								</h3>
-								{isWorldOpen ? (
-									<ul className="flex flex-col gap-2">
-										{selectVisibleProducers(game, world).map((producer) => {
-											const owned = game.producers[producer.id];
-											const cost = producerBulkCost(
-												producer.id,
-												owned,
-												buyQuantity
-											);
-											const boostsName = PRODUCER_NAME_BY_ID.get(
-												PRODUCER_SYNERGIES[producer.id]
-											);
-											const boostedByName = PRODUCER_NAME_BY_ID.get(
-												PRODUCER_SYNERGY_SOURCES[producer.id]
-											);
-											return (
-												<li
-													className="flex items-center justify-between gap-3 bg-muted/30 p-3"
-													key={producer.id}
-												>
-													<div>
-														<h4 className="font-medium">{producer.name}</h4>
-														<p className="text-muted-foreground">
-															{owned} owned ·{" "}
-															{formatGameNumber(producer.baseCps)} base CPS
-														</p>
-														<p className="text-muted-foreground text-xs">
-															{`Boosts ${boostsName} +${SYNERGY_PERCENT}% each · gets +${SYNERGY_PERCENT}% per ${boostedByName} owned`}
-														</p>
-													</div>
-													<Button
-														data-producer-id={producer.id}
-														disabled={isSaving || game.cans < cost}
-														onClick={handleProducerClick}
-														size="sm"
-														variant={game.cans < cost ? "outline" : "default"}
-													>
-														{formatGameNumber(cost)}
-													</Button>
-												</li>
-											);
-										})}
-									</ul>
-								) : null}
-							</div>
+							<li
+								className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+								key={upgrade.id}
+							>
+								<div>
+									<h3 className="font-medium">{upgrade.name}</h3>
+									<p className="text-muted-foreground">
+										{isUnlocked
+											? upgrade.description
+											: `Unlocks at prestige ${unlockLevel}`}
+									</p>
+									<p className="text-muted-foreground">
+										Rank {rank}/{upgrade.maxRank}
+									</p>
+								</div>
+								<Button
+									className="bg-monster-gold text-monster-gold-foreground hover:bg-monster-gold/80"
+									data-upgrade-id={upgrade.id}
+									disabled={
+										isSaving || !isUnlocked || isMaxed || game.goldenCans < cost
+									}
+									onClick={handleUpgradeClick}
+									size="sm"
+									variant="secondary"
+								>
+									{isMaxed ? "Max" : `${formatGameNumber(cost)} golden`}
+								</Button>
+							</li>
 						);
 					})}
-				</section>
+				</ul>
+			</section>
 
-				<section className="flex flex-col gap-2">
+			<section className="flex flex-col gap-2">
+				<div className="flex items-center justify-between gap-2">
 					<h2 className="font-display text-base uppercase tracking-wide">
-						Run upgrades
+						Ascension
 					</h2>
-					{!game.runDraft && game.draftTier < FLAVOR_UPGRADES.length ? (
-						<p className="text-muted-foreground">
-							Next flavor draft unlocks at{" "}
-							{formatGameNumber(FLAVOR_UPGRADES[game.draftTier]?.cost ?? 0)}{" "}
-							cans.
-						</p>
-					) : null}
-					<ul className="flex flex-col gap-2">
-						{selectVisibleRunUpgrades(game).map((upgrade) => {
-							const producerOwned = upgrade.producerId
-								? game.producers[upgrade.producerId]
-								: 0;
-							const producerName = upgrade.producerId
-								? ALL_PRODUCERS.find(({ id }) => id === upgrade.producerId)
-										?.name
-								: undefined;
-							const isUnlocked =
-								upgrade.requiredOwned === undefined ||
-								producerOwned >= upgrade.requiredOwned;
-							return (
-								<li
-									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
-									key={upgrade.id}
-								>
-									<div>
-										<h3 className="font-medium">{upgrade.name}</h3>
-										<p className="text-muted-foreground">
-											{isUnlocked
-												? upgrade.description
-												: `Own ${upgrade.requiredOwned}× ${producerName} — buy them under Producers above`}
-										</p>
-									</div>
-									<Button
-										data-upgrade-id={upgrade.id}
-										disabled={
-											isSaving || !isUnlocked || game.cans < upgrade.cost
-										}
-										onClick={handleUpgradeClick}
-										size="sm"
-										variant={
-											isUnlocked && game.cans >= upgrade.cost
-												? "default"
-												: "outline"
-										}
-									>
-										{formatGameNumber(upgrade.cost)}
-									</Button>
-								</li>
-							);
-						})}
-					</ul>
-				</section>
-
-				<section className="flex flex-col gap-2">
-					<h2 className="font-display text-base uppercase tracking-wide">
-						Golden upgrades
-					</h2>
-					{game.goldenUpgrades["smart-stocker"] > 0 ? (
-						<div className="flex items-center justify-between gap-3 bg-muted/30 p-3">
-							<div>
-								<h3 className="font-medium">Smart Stocker auto-buy</h3>
-								<p className="text-muted-foreground">
-									{isSmartStockerEnabled
-										? "Buying the cheapest producer every 5 seconds"
-										: "Paused — cans pile up untouched"}
-								</p>
-							</div>
-							<Button
-								aria-pressed={isSmartStockerEnabled}
-								onClick={onToggleSmartStocker}
-								size="sm"
-								variant={isSmartStockerEnabled ? "default" : "outline"}
+					<span className="text-monster-gold tabular-nums">
+						{Math.floor(game.ascensionSparks)} ⚡
+					</span>
+				</div>
+				<p className="text-muted-foreground">
+					Permanent tree nodes. Sparks are earned on prestige and never reset.
+				</p>
+				<ul className="flex flex-col gap-2">
+					{ASCENSION_NODES.map((node) => {
+						const nodeId = node.id as AscensionNodeId;
+						const rank = game.ascensionNodes[nodeId] ?? 0;
+						const cost = ascensionNodeCost(nodeId, rank);
+						const isMaxed = rank >= node.maxRank;
+						const isUnlocked = ascensionNodeUnlocked(game.ascensionNodes, node);
+						const requiredNode = node.requiredNode
+							? ASCENSION_NODES.find((entry) => entry.id === node.requiredNode)
+							: undefined;
+						return (
+							<li
+								className="flex items-center justify-between gap-3 bg-muted/30 p-3"
+								key={node.id}
 							>
-								{isSmartStockerEnabled ? "On" : "Off"}
-							</Button>
-						</div>
-					) : null}
-					<ul className="flex flex-col gap-2">
-						{GOLDEN_UPGRADES.map((upgrade) => {
-							const rank = game.goldenUpgrades[upgrade.id];
-							const cost = goldenUpgradeCost(upgrade.id, rank);
-							const unlockLevel = goldenUpgradeUnlockLevel(
-								upgrade,
-								game.ascensionNodes
-							);
-							const isUnlocked = game.prestigeLevel >= unlockLevel;
-							const isMaxed = rank >= upgrade.maxRank;
-							return (
-								<li
-									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
-									key={upgrade.id}
+								<div>
+									<h3 className="font-medium">
+										{node.name}
+										{rank > 0 ? ` · Rank ${rank}/${node.maxRank}` : ""}
+									</h3>
+									<p className="text-muted-foreground">
+										{isUnlocked
+											? node.description
+											: `Requires ${requiredNode?.name ?? node.requiredNode} rank ${node.requiredRank ?? 1}`}
+									</p>
+								</div>
+								<Button
+									data-ascension-id={node.id}
+									disabled={
+										isSaving ||
+										!isUnlocked ||
+										isMaxed ||
+										game.ascensionSparks < cost
+									}
+									onClick={handleAscensionClick}
+									size="sm"
+									variant={
+										isUnlocked && !isMaxed && game.ascensionSparks >= cost
+											? "default"
+											: "outline"
+									}
 								>
-									<div>
-										<h3 className="font-medium">{upgrade.name}</h3>
-										<p className="text-muted-foreground">
-											{isUnlocked
-												? upgrade.description
-												: `Unlocks at prestige ${unlockLevel}`}
-										</p>
-										<p className="text-muted-foreground">
-											Rank {rank}/{upgrade.maxRank}
-										</p>
-									</div>
-									<Button
-										className="bg-monster-gold text-monster-gold-foreground hover:bg-monster-gold/80"
-										data-upgrade-id={upgrade.id}
-										disabled={
-											isSaving ||
-											!isUnlocked ||
-											isMaxed ||
-											game.goldenCans < cost
-										}
-										onClick={handleUpgradeClick}
-										size="sm"
-										variant="secondary"
-									>
-										{isMaxed ? "Max" : `${formatGameNumber(cost)} golden`}
-									</Button>
-								</li>
-							);
-						})}
-					</ul>
-				</section>
-
-				<section className="flex flex-col gap-2">
-					<div className="flex items-center justify-between gap-2">
-						<h2 className="font-display text-base uppercase tracking-wide">
-							Ascension
-						</h2>
-						<span className="text-monster-gold tabular-nums">
-							{Math.floor(game.ascensionSparks)} ⚡
-						</span>
-					</div>
-					<p className="text-muted-foreground">
-						Permanent tree nodes. Sparks are earned on prestige and never reset.
-					</p>
-					<ul className="flex flex-col gap-2">
-						{ASCENSION_NODES.map((node) => {
-							const nodeId = node.id as AscensionNodeId;
-							const rank = game.ascensionNodes[nodeId] ?? 0;
-							const cost = ascensionNodeCost(nodeId, rank);
-							const isMaxed = rank >= node.maxRank;
-							const isUnlocked = ascensionNodeUnlocked(
-								game.ascensionNodes,
-								node
-							);
-							const requiredNode = node.requiredNode
-								? ASCENSION_NODES.find(
-										(entry) => entry.id === node.requiredNode
-									)
-								: undefined;
-							return (
-								<li
-									className="flex items-center justify-between gap-3 bg-muted/30 p-3"
-									key={node.id}
-								>
-									<div>
-										<h3 className="font-medium">
-											{node.name}
-											{rank > 0 ? ` · Rank ${rank}/${node.maxRank}` : ""}
-										</h3>
-										<p className="text-muted-foreground">
-											{isUnlocked
-												? node.description
-												: `Requires ${requiredNode?.name ?? node.requiredNode} rank ${node.requiredRank ?? 1}`}
-										</p>
-									</div>
-									<Button
-										data-ascension-id={node.id}
-										disabled={
-											isSaving ||
-											!isUnlocked ||
-											isMaxed ||
-											game.ascensionSparks < cost
-										}
-										onClick={handleAscensionClick}
-										size="sm"
-										variant={
-											isUnlocked && !isMaxed && game.ascensionSparks >= cost
-												? "default"
-												: "outline"
-										}
-									>
-										{isMaxed ? "Max" : `${cost} ⚡`}
-									</Button>
-								</li>
-							);
-						})}
-					</ul>
-				</section>
-			</CardContent>
-		</Card>
+									{isMaxed ? "Max" : `${cost} ⚡`}
+								</Button>
+							</li>
+						);
+					})}
+				</ul>
+			</section>
+		</>
 	);
 };
 
@@ -1078,17 +1099,17 @@ interface LeaderboardEntry {
 	userId: string;
 }
 
-interface LeaderboardCardProps {
+interface LeaderboardPanelProps {
 	entries: LeaderboardEntry[];
 	isAnonymous: boolean;
 	viewerId: string;
 }
 
-const LeaderboardCard = ({
+const LeaderboardPanel = ({
 	entries,
 	isAnonymous,
 	viewerId,
-}: LeaderboardCardProps) => {
+}: LeaderboardPanelProps) => {
 	const leaderboardTrackedRef = useRef(false);
 
 	useEffect(() => {
@@ -1104,59 +1125,47 @@ const LeaderboardCard = ({
 	}, [entries, isAnonymous, viewerId]);
 
 	return (
-		<Card className="order-4 self-start xl:col-start-1 xl:row-start-2">
-			<CardHeader>
-				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-					Leaderboard
-				</CardTitle>
-				<CardDescription>
-					Top registered players by lifetime cans.
-				</CardDescription>
-			</CardHeader>
-			<CardContent>
-				{entries.length === 0 ? (
-					<p className="text-muted-foreground">
-						No ranked players yet. Claim the first spot.
-					</p>
-				) : (
-					<ol className="flex flex-col gap-2">
-						{entries.slice(0, 10).map((entry) => (
-							<li
-								className={cn(
-									"grid grid-cols-[2rem_1fr_auto] items-center gap-2 p-2",
-									entry.userId === viewerId && "bg-muted"
-								)}
-								key={entry.userId}
-							>
-								<span className="text-muted-foreground tabular-nums">
-									#{entry.rank}
-								</span>
-								<span className="truncate">{entry.name}</span>
-								<span className="text-right tabular-nums">
-									{formatGameNumber(entry.lifetimeCans)}
-									<small className="block text-muted-foreground">
-										P{entry.prestigeLevel}
-									</small>
-								</span>
-							</li>
-						))}
-					</ol>
-				)}
-			</CardContent>
-			{isAnonymous ? (
-				<CardFooter>
-					<Link className="w-full" to="/login">
-						<Button
-							className="w-full"
-							data-rybbit-event="nav.claim_progress"
-							data-rybbit-prop-source="leaderboard"
+		<section className="flex flex-col gap-2">
+			{entries.length === 0 ? (
+				<p className="text-muted-foreground">
+					No ranked players yet. Claim the first spot.
+				</p>
+			) : (
+				<ol className="flex flex-col gap-2">
+					{entries.slice(0, 10).map((entry) => (
+						<li
+							className={cn(
+								"grid grid-cols-[2rem_1fr_auto] items-center gap-2 p-2",
+								entry.userId === viewerId && "bg-muted"
+							)}
+							key={entry.userId}
 						>
-							Claim progress to compete
-						</Button>
-					</Link>
-				</CardFooter>
+							<span className="text-muted-foreground tabular-nums">
+								#{entry.rank}
+							</span>
+							<span className="truncate">{entry.name}</span>
+							<span className="text-right tabular-nums">
+								{formatGameNumber(entry.lifetimeCans)}
+								<small className="block text-muted-foreground">
+									P{entry.prestigeLevel}
+								</small>
+							</span>
+						</li>
+					))}
+				</ol>
+			)}
+			{isAnonymous ? (
+				<Link className="w-full" to="/login">
+					<Button
+						className="w-full"
+						data-rybbit-event="nav.claim_progress"
+						data-rybbit-prop-source="leaderboard"
+					>
+						Claim progress to compete
+					</Button>
+				</Link>
 			) : null}
-		</Card>
+		</section>
 	);
 };
 
@@ -1167,40 +1176,32 @@ interface AchievementsCardProps {
 const AchievementsCard = ({ game }: AchievementsCardProps) => {
 	const unlockedCount = countUnlockedAchievements(game);
 	return (
-		<Card className="order-5 self-start xl:col-start-1">
-			<CardHeader>
-				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-					Achievements
-				</CardTitle>
-				<CardDescription>
-					{unlockedCount}/{ACHIEVEMENTS.length} unlocked · caffeine level +
-					{unlockedCount}% production
-				</CardDescription>
-			</CardHeader>
-			<CardContent className="monster-shop max-h-[40svh] overflow-y-auto">
-				<ul className="flex flex-col gap-1">
-					{ACHIEVEMENTS.map((achievement) => {
-						const isUnlocked = achievement.isUnlocked(game);
-						return (
-							<li
-								className={cn(
-									"flex items-baseline justify-between gap-2 p-2",
-									isUnlocked ? "bg-muted/30" : "opacity-45"
-								)}
-								key={achievement.id}
-							>
-								<span className={cn(isUnlocked && "font-medium")}>
-									{isUnlocked ? "★" : "☆"} {achievement.name}
-								</span>
-								<span className="text-right text-muted-foreground">
-									{achievement.description}
-								</span>
-							</li>
-						);
-					})}
-				</ul>
-			</CardContent>
-		</Card>
+		<section className="flex flex-col gap-2">
+			<h2 className="font-display text-base uppercase tracking-wide">
+				Achievements · {unlockedCount}/{ACHIEVEMENTS.length}
+			</h2>
+			<ul className="flex flex-col gap-1">
+				{ACHIEVEMENTS.map((achievement) => {
+					const isUnlocked = achievement.isUnlocked(game);
+					return (
+						<li
+							className={cn(
+								"flex items-baseline justify-between gap-2 p-2",
+								isUnlocked ? "bg-muted/30" : "opacity-45"
+							)}
+							key={achievement.id}
+						>
+							<span className={cn(isUnlocked && "font-medium")}>
+								{isUnlocked ? "★" : "☆"} {achievement.name}
+							</span>
+							<span className="text-right text-muted-foreground">
+								{achievement.description}
+							</span>
+						</li>
+					);
+				})}
+			</ul>
+		</section>
 	);
 };
 
@@ -1231,7 +1232,7 @@ const CoolantCard = ({
 	}
 	const coolantRate = coolantPerSecond(game);
 	return (
-		<Card className="order-6 self-start xl:col-start-1">
+		<Card size="sm">
 			<CardHeader>
 				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
 					Coolant
@@ -1298,82 +1299,74 @@ const CodexCard = ({ game }: CodexCardProps) => {
 		(collectionMultiplier(game.collection) - 1) * 100
 	);
 	return (
-		<Card className="order-7 self-start xl:col-start-1">
-			<CardHeader>
-				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-					Codex
-				</CardTitle>
-				<CardDescription>
-					{owned.size}/{CAN_VARIANTS.length} cans collected · codex bonus +
-					{bonusPercent}% production
-				</CardDescription>
-			</CardHeader>
-			<CardContent className="monster-shop max-h-[40svh] overflow-y-auto">
-				<div className="flex flex-col gap-3">
-					{COLLECTION_SETS.map((set) => {
-						const variants = CAN_VARIANTS.filter(
-							(variant) => variant.setId === set.id
-						);
-						const ownedCount = variants.filter((variant) =>
-							owned.has(variant.id)
-						).length;
-						const isComplete = completed.has(set.id);
-						return (
-							<section
-								className={cn("p-2", isComplete && "bg-muted/30")}
-								key={set.id}
-							>
-								<header className="flex items-baseline justify-between gap-2">
-									<span
-										className={cn("font-medium", isComplete && "text-primary")}
-									>
-										{isComplete ? "★" : "☆"} {set.name}
-									</span>
-									<span className="text-right text-muted-foreground">
-										{ownedCount}/{variants.length} · {set.description}
-										{isComplete ? "" : " when complete"}
-									</span>
-								</header>
-								<ul className="mt-1 grid gap-1 sm:grid-cols-2">
-									{variants.map((variant) => {
-										const isOwned = owned.has(variant.id);
-										return (
-											<li
-												className={cn(
-													"flex items-center gap-2 p-1",
-													!isOwned && "opacity-45"
-												)}
-												key={variant.id}
-												title={variant.description}
-											>
-												<span
-													aria-hidden="true"
-													className="inline-block h-3 w-2.5 shrink-0 rounded-[2px] border"
-													style={{
-														backgroundColor: isOwned
-															? variant.color
-															: "transparent",
-														borderColor: variant.color,
-													}}
-												/>
-												<span className="min-w-0">
-													<span className="block truncate font-medium">
-														{variant.name}
-													</span>
-													<span className="block truncate text-muted-foreground">
-														{variant.description}
-													</span>
+		<section className="flex flex-col gap-2">
+			<h2 className="font-display text-base uppercase tracking-wide">
+				Codex · {owned.size}/{CAN_VARIANTS.length} · +{bonusPercent}%
+			</h2>
+			<div className="flex flex-col gap-3">
+				{COLLECTION_SETS.map((set) => {
+					const variants = CAN_VARIANTS.filter(
+						(variant) => variant.setId === set.id
+					);
+					const ownedCount = variants.filter((variant) =>
+						owned.has(variant.id)
+					).length;
+					const isComplete = completed.has(set.id);
+					return (
+						<section
+							className={cn("p-2", isComplete && "bg-muted/30")}
+							key={set.id}
+						>
+							<header className="flex items-baseline justify-between gap-2">
+								<span
+									className={cn("font-medium", isComplete && "text-primary")}
+								>
+									{isComplete ? "★" : "☆"} {set.name}
+								</span>
+								<span className="text-right text-muted-foreground">
+									{ownedCount}/{variants.length} · {set.description}
+									{isComplete ? "" : " when complete"}
+								</span>
+							</header>
+							<ul className="mt-1 grid gap-1 sm:grid-cols-2">
+								{variants.map((variant) => {
+									const isOwned = owned.has(variant.id);
+									return (
+										<li
+											className={cn(
+												"flex items-center gap-2 p-1",
+												!isOwned && "opacity-45"
+											)}
+											key={variant.id}
+											title={variant.description}
+										>
+											<span
+												aria-hidden="true"
+												className="inline-block h-3 w-2.5 shrink-0 rounded-[2px] border"
+												style={{
+													backgroundColor: isOwned
+														? variant.color
+														: "transparent",
+													borderColor: variant.color,
+												}}
+											/>
+											<span className="min-w-0">
+												<span className="block truncate font-medium">
+													{variant.name}
 												</span>
-											</li>
-										);
-									})}
-								</ul>
-							</section>
-						);
-					})}
-				</div>
-			</CardContent>
-		</Card>
+												<span className="block truncate text-muted-foreground">
+													{variant.description}
+												</span>
+											</span>
+										</li>
+									);
+								})}
+							</ul>
+						</section>
+					);
+				})}
+			</div>
+		</section>
 	);
 };
 
@@ -1416,77 +1409,58 @@ const ContractsCard = ({
 	onAccept,
 }: ContractsCardProps) => {
 	const contract = game.contract;
+	if (!contract) {
+		return null;
+	}
 	return (
-		<Card className="order-6 self-start xl:col-start-1">
-			<CardHeader>
-				<CardTitle className="font-display text-2xl uppercase leading-none tracking-wide">
-					Contracts
-				</CardTitle>
-				<CardDescription>
-					Timed challenges · {game.contractCompletions} completed · prestige
-					refreshes the pool
-				</CardDescription>
-			</CardHeader>
+		<Card size="sm">
 			<CardContent>
-				{contract ? (
-					contract.status === "offered" ? (
-						<div className="flex flex-col gap-3">
-							<div>
-								<h3 className="font-medium">{contract.name}</h3>
-								<p>{contract.description}</p>
-								<p className="text-muted-foreground">
-									Reward: <ContractRewardText reward={contract.reward} />
-								</p>
-							</div>
-							<div className="flex gap-2">
-								<Button disabled={isSaving} onClick={onAccept}>
-									Accept
-								</Button>
-								<Button
-									disabled={isSaving}
-									onClick={onAbandon}
-									variant="outline"
-								>
-									Skip
-								</Button>
-							</div>
-						</div>
-					) : (
-						<div className="flex flex-col gap-3">
-							<div className="flex items-baseline justify-between gap-2">
-								<h3 className="font-medium">{contract.name}</h3>
-								<span className="tabular-nums">
-									{contract.expiresAt === null
-										? ""
-										: formatContractTimeLeft(
-												contract.expiresAt,
-												game.serverNow
-											)}
-								</span>
-							</div>
-							<p className="text-muted-foreground">{contract.description}</p>
-							<progress
-								aria-label={`Progress toward ${contract.name}`}
-								className="monster-progress w-full"
-								max={contract.target}
-								value={Math.min(contract.progress, contract.target)}
-							/>
-							<p className="tabular-nums">
-								{formatGameNumber(Math.min(contract.progress, contract.target))}{" "}
-								/ {formatGameNumber(contract.target)}
-							</p>
+				{contract.status === "offered" ? (
+					<div className="flex flex-col gap-3">
+						<div>
+							<h3 className="font-medium">{contract.name}</h3>
+							<p>{contract.description}</p>
 							<p className="text-muted-foreground">
 								Reward: <ContractRewardText reward={contract.reward} />
 							</p>
+						</div>
+						<div className="flex gap-2">
+							<Button disabled={isSaving} onClick={onAccept}>
+								Accept
+							</Button>
 							<Button disabled={isSaving} onClick={onAbandon} variant="outline">
-								Give up
+								Skip
 							</Button>
 						</div>
-					)
+					</div>
 				) : (
-					<p className="text-muted-foreground">
-						Next contract offer is brewing…
-					</p>
+					<div className="flex flex-col gap-3">
+						<div className="flex items-baseline justify-between gap-2">
+							<h3 className="font-medium">{contract.name}</h3>
+							<span className="tabular-nums">
+								{contract.expiresAt === null
+									? ""
+									: formatContractTimeLeft(contract.expiresAt, game.serverNow)}
+							</span>
+						</div>
+						<p className="text-muted-foreground">{contract.description}</p>
+						<progress
+							aria-label={`Progress toward ${contract.name}`}
+							className="monster-progress w-full"
+							max={contract.target}
+							value={Math.min(contract.progress, contract.target)}
+						/>
+						<p className="tabular-nums">
+							{formatGameNumber(Math.min(contract.progress, contract.target))} /{" "}
+							{formatGameNumber(contract.target)}
+						</p>
+						<p className="text-muted-foreground">
+							Reward: <ContractRewardText reward={contract.reward} />
+						</p>
+						<Button disabled={isSaving} onClick={onAbandon} variant="outline">
+							Give up
+						</Button>
+					</div>
 				)}
 			</CardContent>
 		</Card>
@@ -1545,6 +1519,7 @@ export const MonsterGame = () => {
 			: window.localStorage.getItem("monster-muted") === "true"
 	);
 	const [buyQuantity, setBuyQuantity] = useState<BuyQuantity>(1);
+	const [panelTab, setPanelTab] = useState<PanelTabId>("shop");
 	const [isSmartStockerEnabled, setIsSmartStockerEnabled] = useState(
 		() =>
 			typeof window === "undefined" ||
@@ -2376,70 +2351,151 @@ export const MonsterGame = () => {
 		abandonContractNow().catch(() => undefined);
 	}, [abandonContractNow]);
 
+	const handleTabClick = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+		setPanelTab(event.currentTarget.dataset.tab as PanelTabId);
+	}, []);
+
 	if (isSessionPending || !session || isStateLoading || !game) {
 		return <GameLoading />;
 	}
 
+	const hasPrestiged =
+		game.prestigeLevel > 0 || game.goldenCans > 0 || game.ascensionSparks > 0;
+	const tabs = PANEL_TABS.filter(
+		(tab) => tab.id !== "prestige" || hasPrestiged
+	);
+	const activeTab = tabs.some((tab) => tab.id === panelTab) ? panelTab : "shop";
+
 	return (
 		<main
 			className={cn(
-				"monster-game mx-auto grid w-full max-w-[1440px] gap-4 px-4 pt-4 pb-8 xl:grid-cols-[300px_minmax(340px,1fr)_380px] xl:grid-rows-[auto_1fr]",
+				"monster-game mx-auto grid w-full max-w-[1440px] gap-4 px-4 pt-4 pb-8 xl:grid-cols-[300px_minmax(340px,1fr)_380px] xl:items-start",
 				isEsMode && "is-es",
 				isFrenzyActive && "is-frenzy"
 			)}
 		>
-			<SeasonBanner />
-			<StatsCard
-				clicksPerSecond={clicksPerSecond}
-				game={game}
-				isSaving={isSaving}
-				onPrestige={confirmPrestige}
-			/>
-			<CanCard
-				clickLabels={clickLabels}
-				game={game}
-				isEsMode={isEsMode}
-				isMegisActive={isMegisActive}
-				isMuted={isMuted}
-				onClick={clickCan}
-				onToggleEsMode={toggleEsMode}
-				onToggleMute={toggleMute}
-			/>
-			<ShopCard
-				buyQuantity={buyQuantity}
-				game={game}
-				isSaving={isSaving}
-				isSmartStockerEnabled={isSmartStockerEnabled}
-				onBuyAscensionNode={handleBuyAscensionNode}
-				onBuyProducer={handleBuyProducer}
-				onBuyUpgrade={handleBuyUpgrade}
-				onChangeBuyQuantity={changeBuyQuantity}
-				onPickDraft={handlePickDraft}
-				onToggleSmartStocker={toggleSmartStocker}
-			/>
-			<LeaderboardCard
-				entries={leaderboardQuery.data ?? []}
-				isAnonymous={Boolean(session.user.isAnonymous)}
-				viewerId={session.user.id}
-			/>
-			<SeasonPanel
-				isAnonymous={Boolean(session.user.isAnonymous)}
-				viewerId={session.user.id}
-			/>
-			<AchievementsCard game={game} />
-			<CoolantCard
-				game={game}
-				isSaving={isSaving}
-				onBuyCoolingTower={handleBuyCoolingTower}
-				onVentWall={handleVentWall}
-			/>
-			<CodexCard game={game} />
-			<ContractsCard
-				game={game}
-				isSaving={isSaving}
-				onAbandon={handleAbandonContract}
-				onAccept={handleAcceptContract}
-			/>
+			<div className="order-3 xl:order-1">
+				<StatsCard
+					clicksPerSecond={clicksPerSecond}
+					game={game}
+					isSaving={isSaving}
+					onPrestige={confirmPrestige}
+				/>
+			</div>
+			<div className="order-1 flex flex-col gap-4 xl:order-2">
+				<CanCard
+					clickLabels={clickLabels}
+					game={game}
+					isEsMode={isEsMode}
+					isMegisActive={isMegisActive}
+					isMuted={isMuted}
+					onClick={clickCan}
+					onToggleEsMode={toggleEsMode}
+					onToggleMute={toggleMute}
+				/>
+				<ContractsCard
+					game={game}
+					isSaving={isSaving}
+					onAbandon={handleAbandonContract}
+					onAccept={handleAcceptContract}
+				/>
+				<CoolantCard
+					game={game}
+					isSaving={isSaving}
+					onBuyCoolingTower={handleBuyCoolingTower}
+					onVentWall={handleVentWall}
+				/>
+			</div>
+			<Card className="order-2 xl:order-3">
+				<CardHeader>
+					<DropdownMenu>
+						<DropdownMenuTrigger
+							render={
+								<Button
+									aria-label="Open game menu"
+									className="justify-start xl:hidden"
+									variant="outline"
+								/>
+							}
+						>
+							<MenuIcon />
+							{tabs.find((tab) => tab.id === activeTab)?.label}
+						</DropdownMenuTrigger>
+						<DropdownMenuContent className="bg-card">
+							<DropdownMenuRadioGroup
+								onValueChange={setPanelTab}
+								value={activeTab}
+							>
+								{tabs.map((tab) => (
+									<DropdownMenuRadioItem key={tab.id} value={tab.id}>
+										{tab.label}
+									</DropdownMenuRadioItem>
+								))}
+							</DropdownMenuRadioGroup>
+						</DropdownMenuContent>
+					</DropdownMenu>
+					<div className="hidden flex-wrap gap-1 xl:flex" role="tablist">
+						{tabs.map((tab) => (
+							<Button
+								aria-selected={activeTab === tab.id}
+								data-tab={tab.id}
+								key={tab.id}
+								onClick={handleTabClick}
+								role="tab"
+								size="sm"
+								variant={activeTab === tab.id ? "default" : "ghost"}
+							>
+								{tab.label}
+							</Button>
+						))}
+					</div>
+				</CardHeader>
+				<CardContent
+					className="monster-shop flex max-h-[75svh] flex-col gap-6 overflow-y-auto"
+					role="tabpanel"
+				>
+					{activeTab === "shop" ? (
+						<ShopPanel
+							buyQuantity={buyQuantity}
+							game={game}
+							isSaving={isSaving}
+							onBuyProducer={handleBuyProducer}
+							onBuyUpgrade={handleBuyUpgrade}
+							onChangeBuyQuantity={changeBuyQuantity}
+							onPickDraft={handlePickDraft}
+						/>
+					) : null}
+					{activeTab === "prestige" ? (
+						<PrestigePanel
+							game={game}
+							isSaving={isSaving}
+							isSmartStockerEnabled={isSmartStockerEnabled}
+							onBuyAscensionNode={handleBuyAscensionNode}
+							onBuyUpgrade={handleBuyUpgrade}
+							onToggleSmartStocker={toggleSmartStocker}
+						/>
+					) : null}
+					{activeTab === "collection" ? (
+						<>
+							<AchievementsCard game={game} />
+							<CodexCard game={game} />
+						</>
+					) : null}
+					{activeTab === "ranks" ? (
+						<LeaderboardPanel
+							entries={leaderboardQuery.data ?? []}
+							isAnonymous={Boolean(session.user.isAnonymous)}
+							viewerId={session.user.id}
+						/>
+					) : null}
+					{activeTab === "season" ? (
+						<SeasonPanel
+							isAnonymous={Boolean(session.user.isAnonymous)}
+							viewerId={session.user.id}
+						/>
+					) : null}
+				</CardContent>
+			</Card>
 			<GoldenRushCan game={game} onClaim={handleClaimGoldenRush} />
 		</main>
 	);
